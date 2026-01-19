@@ -14,6 +14,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1] - 2026-01-18
+
+### Added
+- **Custom Environment Variables**: Support for setting custom environment variables in model configuration
+  - New "Environment Variables" tab in Custom Startup Configuration section
+  - Available in both standard and workflow model forms
+  - Documentation guide: `docs/models/setting-custom-env-vars.md`
+  - Enables advanced vLLM features like FlashInfer MoE FP8 support
+  - Enhanced `docker_manager.py` to handle custom environment variables
+
+### Changed
+- Improved model startup configuration flexibility
+- Enhanced docker container startup with custom environment variable support
+
+### Documentation
+- Added comprehensive guide for setting custom environment variables (`docs/models/setting-custom-env-vars.md`)
+- Cleaned up implementation gap documentation files
+
+---
+
 ## [0.1.0-beta] - 2026-01-11
 
 ### Added
@@ -158,6 +178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- **0.1.1** (2026-01-18): Custom environment variables support
 - **0.1.0-beta** (2026-01-11): First public beta release
 
 ---

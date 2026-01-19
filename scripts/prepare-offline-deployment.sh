@@ -166,7 +166,7 @@ echo "Creating manifest..."
 cat > "$OUTPUT_DIR/manifest.json" << EOF
 {
   "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "cortex_version": "0.1.0",
+  "cortex_version": "0.1.1",
   "prepared_by": "$(whoami)@$(hostname)",
   "images": {
     "engines": [

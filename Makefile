@@ -508,7 +508,7 @@ ip: ## Show detected host IP address
 
 version: ## Show version information
 	@echo "Cortex Gateway"
-	@echo "Version: 0.1.0"
+	@echo "Version: 0.1.1"
 	@echo ""
 	@docker --version
 	@docker compose version
