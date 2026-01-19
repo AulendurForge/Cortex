@@ -79,9 +79,9 @@ help: ## Show this help message
 # Core Container Operations
 # ============================================================================
 
-build: ## Build all Docker images
+build: ## Build all Docker images (rebuilds if dependencies changed)
 	@echo "$(COLOR_BOLD)Building Docker images...$(COLOR_RESET)"
-	$(DOCKER_COMPOSE) build
+	$(DOCKER_COMPOSE) build --pull
 
 up: ## Start all services (detached mode)
 	@echo "$(COLOR_BOLD)Starting Cortex services...$(COLOR_RESET)"
@@ -422,7 +422,7 @@ watch: ## Watch container status (refresh every 2s)
 # Quick Start Helpers
 # ============================================================================sup
 
-quick-start: up ## Quick start: up with automatic admin bootstrap
+quick-start: build up ## Quick start: build and up with automatic admin bootstrap
 	@echo ""
 	@echo "$(COLOR_GREEN)$(COLOR_BOLD)✓ Cortex is ready!$(COLOR_RESET)"
 	@echo ""

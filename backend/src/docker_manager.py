@@ -376,11 +376,37 @@ def _build_command(m: Model) -> list[str]:
         pass
     if m.gpu_memory_utilization:
         cmd += ["--gpu-memory-utilization", str(m.gpu_memory_utilization)]
-    # Max context length:
+    
+    # Phase 2: Parse custom startup args early to check for overrides (Plane B)
+    # This allows custom args to override standard args (e.g., max-model-len > 131072)
+    custom_cli_args = []
+    custom_args_set = set()  # Track which flags are in custom args
+    try:
+        from .utils import parse_custom_args_to_cli
+        custom_args_json = getattr(m, 'engine_startup_args_json', None)
+        if custom_args_json:
+            custom_cli_args = parse_custom_args_to_cli(custom_args_json)
+            if custom_cli_args:
+                # Build set of flags that are overridden by custom args
+                # This allows custom args to override standard args (e.g., max-model-len)
+                i = 0
+                while i < len(custom_cli_args):
+                    arg = custom_cli_args[i]
+                    if arg.startswith('--') or arg.startswith('-'):
+                        custom_args_set.add(arg.lower())
+                        # Skip the value if this is a flag with value
+                        if i + 1 < len(custom_cli_args) and not custom_cli_args[i + 1].startswith('-'):
+                            i += 1
+                    i += 1
+    except Exception as e:
+        logger.warning(f"Failed to parse custom startup args for model {m.id}: {e}")
+    
+    # Max context length: skip if overridden by custom args
     # For embedding models, vLLM auto-detects from model config (max_position_embeddings).
     # However, some models (like BGE-Large) have incorrect config values, so allow override.
     # For generation models, always pass through when provided.
-    if m.max_model_len:
+    # Custom args can override this to exceed UI slider limits (e.g., 262144 for Nemotron)
+    if m.max_model_len and '--max-model-len' not in custom_args_set:
         # Allow override for embedding models (some have incorrect max_position_embeddings in config)
         # For generation models, always pass through
         try:
@@ -521,17 +547,13 @@ def _build_command(m: Model) -> list[str]:
     # They will be applied by the gateway when forwarding requests (Plane C).
     # See cortexSustainmentPlan.md for details.
     
-    # Phase 2: Append custom startup args (Plane B)
-    try:
-        from .utils import parse_custom_args_to_cli
-        custom_args_json = getattr(m, 'engine_startup_args_json', None)
-        if custom_args_json:
-            custom_cli_args = parse_custom_args_to_cli(custom_args_json)
-            if custom_cli_args:
-                cmd.extend(custom_cli_args)
-                logger.info(f"Added {len(custom_cli_args)} custom startup args for model {m.id}")
-    except Exception as e:
-        logger.warning(f"Failed to parse custom startup args for model {m.id}: {e}")
+    # Phase 2: Append custom startup args (Plane B) - these override standard args
+    # Custom args were parsed earlier to check for overrides (see above)
+    if custom_cli_args:
+        cmd.extend(custom_cli_args)
+        logger.info(f"Added {len(custom_cli_args)} custom startup args for model {m.id}")
+        if custom_args_set:
+            logger.debug(f"Custom args override standard args for: {sorted(custom_args_set)}")
     
     return cmd
 

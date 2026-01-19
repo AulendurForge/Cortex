@@ -355,6 +355,54 @@ export function ModelWorkflowForm({
                           engineType={values.engine_type} 
                           modeLocked={modeLocked} 
                         />
+                        
+                        {/* Engine Image Override - Critical for models like Nemotron that need specific vLLM versions */}
+                        {values.engine_type && (
+                          <div className="mt-4 p-4 bg-white/5 border border-white/10 rounded-xl">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-amber-400">🐳</span>
+                              <h3 className="text-sm font-semibold text-white/90">Engine Image (Optional)</h3>
+                            </div>
+                            <p className="text-xs text-white/60 mb-3">
+                              Override the default Docker image. Required for some models (e.g., Nemotron needs vLLM ≥0.12.0).
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <label className="text-sm">
+                                <span className="text-white/80">Docker Image</span>
+                                <input
+                                  className="input mt-1"
+                                  type="text"
+                                  placeholder={values.engine_type === 'vllm' 
+                                    ? 'vllm/vllm-openai:v0.12.0' 
+                                    : 'ghcr.io/ggml-org/llama.cpp:server-cuda'}
+                                  value={values.engine_image || ''}
+                                  onChange={(e) => set('engine_image', e.target.value)}
+                                />
+                                <p className="text-[10px] text-white/50 mt-1">
+                                  Leave blank for system default. Examples: <code className="bg-white/10 px-1 rounded">vllm/vllm-openai:v0.12.0</code>, <code className="bg-white/10 px-1 rounded">vllm/vllm-openai:latest</code>
+                                </p>
+                              </label>
+                              <label className="text-sm">
+                                <span className="text-white/80">Version Tag (Reference)</span>
+                                <input
+                                  className="input mt-1"
+                                  type="text"
+                                  placeholder="e.g., v0.12.0"
+                                  value={values.engine_version || ''}
+                                  onChange={(e) => set('engine_version', e.target.value)}
+                                />
+                                <p className="text-[10px] text-white/50 mt-1">
+                                  Optional: For tracking/documentation only.
+                                </p>
+                              </label>
+                            </div>
+                            {values.engine_type === 'vllm' && (
+                              <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-200">
+                                <strong>💡 Tip:</strong> Nemotron, newer Qwen models, and other recent architectures may require vLLM v0.12.0 or later.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
