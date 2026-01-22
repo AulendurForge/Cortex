@@ -10,16 +10,35 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U cortex"], interval: 5s, timeout: 5s, retries: 10 }
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Expose to localhost for gateway (host network mode) to connect
+    # Using non-standard ports to avoid conflicts with system services
+    ports:
+      - "127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}:5432"
 
   redis:
     image: redis:7
     volumes:
       - redis_data:/data
+    # Expose to localhost for gateway (host network mode) to connect
+    # Using non-standard ports to avoid conflicts with system services
+    ports:
+      - "127.0.0.1:${CORTEX_REDIS_PORT:-16379}:6379"
 
   gateway:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # =========================================================================
+    # HOST NETWORK MODE - Universal External Access
+    # =========================================================================
+    # Using host network mode allows ANY Docker container or external application
+    # to reach the Cortex API at http://<HOST_IP>:8084 or http://host.docker.internal:8084
+    # without requiring manual network configuration.
+    #
+    # This is the recommended setup for integration with external applications
+    # like MAGE, LangChain, or any OpenAI-compatible client.
+    # =========================================================================
+    network_mode: host
     env_file:
       - ./backend/.env.dev
     environment:
@@ -30,8 +49,9 @@ services:
       CORS_ENABLED: "true"
       # Pass detected host IP to container for CORS configuration
       HOST_IP: ${HOST_IP:-localhost}
-      # Dynamic CORS origins using detected host IP, plus localhost fallbacks
-      CORS_ALLOW_ORIGINS: http://${HOST_IP:-localhost}:3001,http://localhost:3001,http://127.0.0.1:3001
+      # Dynamic CORS origins - with host network, allow from any origin for API access
+      # CORS only affects browser requests; server-to-server requests are unaffected
+      CORS_ALLOW_ORIGINS: http://${HOST_IP:-localhost}:3001,http://localhost:3001,http://127.0.0.1:3001,*
       # Auto-bootstrap admin user on first startup (dev mode)
       ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
       ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-admin}
@@ -47,7 +67,13 @@ services:
       # Keep in sync with backend/src/config.py and scripts/prepare-offline-deployment.sh
       # NOTE: Qwen3 requires newer Transformers, so default to a compatible image.
       VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
-    ports: ["${GATEWAY_PORT:-8084}:8084"]
+      # Database and Redis URLs - use localhost since gateway is on host network
+      # Using non-standard ports to avoid conflicts with system services
+      DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/cortex
+      REDIS_URL: redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0
+      # Prometheus URL - use localhost
+      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-9090}
+    # Note: 'ports' is not used with network_mode: host - container uses host ports directly
     depends_on:
       - redis
       - postgres
@@ -86,6 +112,9 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports: ["${PROM_PORT:-9090}:9090"]
+    # Enable host.docker.internal resolution for reaching gateway on host network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on: [gateway]
     command: ["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.retention.time=7d"]
 

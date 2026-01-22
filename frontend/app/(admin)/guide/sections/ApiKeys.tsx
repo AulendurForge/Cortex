@@ -583,13 +583,77 @@ export default function ApiKeys() {
         </div>
       </section>
 
-      {/* SDK Integration */}
+      {/* Connecting from Docker Containers */}
       <section className="space-y-3">
-        <SectionTitle variant="cyan" className="text-[10px]">7. SDK Integration</SectionTitle>
+        <SectionTitle variant="emerald" className="text-[10px]">7. Connecting from Docker Containers</SectionTitle>
         <Card className="p-4 bg-white/[0.02] border-white/5 space-y-4">
           <p className="text-[12px] text-white/70 leading-relaxed">
-            Cortex is fully compatible with the OpenAI SDK. Users can integrate their API keys 
-            into any application that supports the OpenAI API by simply changing the base URL.
+            Cortex gateway runs with <strong className="text-white">host network mode</strong>, making it accessible 
+            from any Docker container or external application without special network configuration.
+          </p>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Access Methods</div>
+              <div className="space-y-2">
+                <ConnectionMethod 
+                  method="host.docker.internal"
+                  url={`http://host.docker.internal:8084/v1`}
+                  note="Recommended for Docker containers (requires extra_hosts)"
+                />
+                <ConnectionMethod 
+                  method="Host LAN IP"
+                  url={`http://${hostIP}:8084/v1`}
+                  note="Works from containers and LAN devices"
+                />
+                <ConnectionMethod 
+                  method="Localhost"
+                  url="http://localhost:8084/v1"
+                  note="Same machine only"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">Docker Compose Example</div>
+              <div className="relative">
+                <pre className="text-[10px] bg-black/40 rounded-xl p-3 overflow-x-auto border border-white/5 text-white/60 font-mono leading-relaxed">
+{`services:
+  your-app:
+    image: your-app-image
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OPENAI_API_BASE: "http://host.docker.internal:8084/v1"
+      OPENAI_API_KEY: "ctx_xxxxxxxx_..."`}
+                </pre>
+                <button 
+                  onClick={() => copyToClipboard(`extra_hosts:\n  - "host.docker.internal:host-gateway"`)}
+                  className="absolute top-2 right-2 p-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <InfoBox variant="blue" className="text-[11px] p-3">
+            <strong>Linux Firewall Note:</strong> If using UFW firewall on Linux, run{' '}
+            <code className="bg-black/30 px-1 rounded">make setup-firewall</code> once to allow Docker container traffic 
+            to reach host services. This is a one-time setup.
+          </InfoBox>
+        </Card>
+      </section>
+
+      {/* SDK Integration */}
+      <section className="space-y-3">
+        <SectionTitle variant="cyan" className="text-[10px]">8. SDK & Client Integration</SectionTitle>
+        <Card className="p-4 bg-white/[0.02] border-white/5 space-y-4">
+          <p className="text-[12px] text-white/70 leading-relaxed">
+            Cortex is fully compatible with the <strong className="text-white">OpenAI SDK</strong> and any OpenAI-compatible 
+            client (LangChain, LlamaIndex, etc.). Simply point the base URL to Cortex.
           </p>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -681,7 +745,7 @@ const response = await client.chat.completions
 
       {/* Best Practices */}
       <section className="space-y-3">
-        <SectionTitle variant="purple" className="text-[10px]">8. Best Practices</SectionTitle>
+        <SectionTitle variant="purple" className="text-[10px]">9. Best Practices</SectionTitle>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4 bg-emerald-500/5 border-emerald-500/20 space-y-3">
             <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">✓ Recommended</div>
@@ -751,7 +815,7 @@ const response = await client.chat.completions
 
       {/* Troubleshooting */}
       <section className="space-y-3">
-        <SectionTitle variant="blue" className="text-[10px]">9. Troubleshooting</SectionTitle>
+        <SectionTitle variant="blue" className="text-[10px]">10. Troubleshooting</SectionTitle>
         <div className="space-y-3">
           <TroubleshootItem 
             issue='401 Unauthorized — "Missing bearer token"'
@@ -776,6 +840,14 @@ const response = await client.chat.completions
           <TroubleshootItem 
             issue="Key expired but user still needs access"
             solution="Expired keys cannot be extended. Create a new key with the same configuration and update the user's integration. Consider using longer expiration or no expiration for permanent access."
+          />
+          <TroubleshootItem 
+            issue="Connection timeout from Docker container"
+            solution="Ensure extra_hosts is configured with 'host.docker.internal:host-gateway'. On Linux with UFW firewall, run 'make setup-firewall' from the Cortex directory to allow Docker container traffic."
+          />
+          <TroubleshootItem 
+            issue="Cannot reach Cortex from external application"
+            solution="Verify Cortex is running (make status). From Docker containers, use host.docker.internal:8084 or the host's LAN IP. Test with: curl http://HOST_IP:8084/health"
           />
         </div>
       </section>
@@ -943,5 +1015,15 @@ function TroubleshootItem({ issue, solution }: { issue: string; solution: string
         </div>
       </div>
     </Card>
+  );
+}
+
+function ConnectionMethod({ method, url, note }: { method: string; url: string; note: string }) {
+  return (
+    <div className="p-2.5 bg-emerald-500/5 rounded-lg border border-emerald-500/20 space-y-1">
+      <div className="text-[10px] font-bold text-emerald-300">{method}</div>
+      <code className="text-[9px] text-cyan-300 block font-mono">{url}</code>
+      <div className="text-[9px] text-white/40">{note}</div>
+    </div>
   );
 }

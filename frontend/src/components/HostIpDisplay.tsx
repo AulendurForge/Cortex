@@ -56,17 +56,17 @@ export function HostIpDisplay({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           <div className="space-y-4">
             <div>
-              <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 mb-2">Network Discovery</Badge>
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">System Endpoint Assignment</h3>
+              <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 mb-2">Host Network Mode</Badge>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Cortex API Endpoints</h3>
             </div>
             
             <div className="flex flex-wrap gap-6">
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Node Address</div>
+                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">LAN / External</div>
                 <div className="flex items-center gap-2">
-                  <code className="text-lg font-mono text-emerald-400 font-black tracking-tight">{hostIP}</code>
+                  <code className="text-lg font-mono text-emerald-400 font-black tracking-tight">{hostIP}:8084</code>
                   {showCopy && (
-                    <button onClick={() => copyToClipboard(hostIP, 'IP')} className="p-1 hover:bg-emerald-500/10 rounded-md transition-colors text-emerald-500/50 hover:text-emerald-400">
+                    <button onClick={() => copyToClipboard(`http://${hostIP}:8084/v1`, 'LAN URL')} className="p-1 hover:bg-emerald-500/10 rounded-md transition-colors text-emerald-500/50 hover:text-emerald-400">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                     </button>
                   )}
@@ -74,37 +74,51 @@ export function HostIpDisplay({
               </div>
 
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Inference Port</div>
-                <code className="text-lg font-mono text-indigo-400 font-black tracking-tight">8084</code>
+                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Docker Containers</div>
+                <div className="flex items-center gap-2">
+                  <code className="text-sm font-mono text-cyan-400 font-bold tracking-tight">host.docker.internal:8084</code>
+                  {showCopy && (
+                    <button onClick={() => copyToClipboard('http://host.docker.internal:8084/v1', 'Docker URL')} className="p-1 hover:bg-cyan-500/10 rounded-md transition-colors text-cyan-500/50 hover:text-cyan-400">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Interface Port</div>
+                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Admin UI Port</div>
                 <code className="text-lg font-mono text-purple-400 font-black tracking-tight">3001</code>
               </div>
             </div>
           </div>
 
           {showCopy && (
-            <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col gap-2">
               <Button 
                 variant="default" 
                 size="sm"
                 className="font-bold uppercase tracking-widest text-[9px] bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10 hover:text-emerald-300"
-                onClick={() => copyToClipboard(`http://${hostIP}:8084`, 'Gateway URL')}
+                onClick={() => copyToClipboard(`http://${hostIP}:8084/v1`, 'API Base URL')}
               >
-                Copy Gateway URL
+                Copy API Base URL
               </Button>
               <Button 
                 variant="default" 
                 size="sm"
-                className="font-bold uppercase tracking-widest text-[9px] bg-indigo-500/5 border-indigo-500/20 hover:bg-indigo-500/10 hover:text-indigo-300"
-                onClick={() => copyToClipboard(`http://${hostIP}:3001`, 'UI URL')}
+                className="font-bold uppercase tracking-widest text-[9px] bg-cyan-500/5 border-cyan-500/20 hover:bg-cyan-500/10 hover:text-cyan-300"
+                onClick={() => copyToClipboard('http://host.docker.internal:8084/v1', 'Docker URL')}
               >
-                Copy Administrative URL
+                Copy Docker URL
               </Button>
             </div>
           )}
+        </div>
+        
+        {/* Docker tip */}
+        <div className="mt-4 pt-4 border-t border-white/5 text-[10px] text-white/40">
+          <span className="text-cyan-400">💡 Docker containers:</span> Add{' '}
+          <code className="bg-black/30 px-1 rounded text-cyan-300">extra_hosts: [&quot;host.docker.internal:host-gateway&quot;]</code>{' '}
+          to your docker-compose for connectivity.
         </div>
       </Card>
     );

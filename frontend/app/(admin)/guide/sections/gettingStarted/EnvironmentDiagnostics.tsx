@@ -240,6 +240,64 @@ export default function EnvironmentDiagnostics() {
         </Card>
       </section>
 
+      {/* Firewall Setup for External Access */}
+      <section className="space-y-3">
+        <SectionTitle variant="emerald" className="text-[10px]">Firewall Setup (Linux/UFW)</SectionTitle>
+        <Card className="p-4 bg-emerald-500/5 border-emerald-500/20 space-y-4">
+          <p className="text-[12px] text-white/70 leading-relaxed">
+            Cortex gateway runs with <strong className="text-white">host network mode</strong> for universal access. 
+            On Linux systems with UFW firewall enabled, you need to allow Docker container traffic to reach host services.
+          </p>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">One-Time Setup</div>
+              <CommandWithOutput 
+                command="make setup-firewall"
+                description="Run from Cortex directory (requires sudo)"
+                onCopy={copyToClipboard}
+              />
+              <div className="text-[10px] text-white/50 leading-relaxed">
+                Or manually: <code className="bg-black/30 px-1 rounded text-cyan-300">sudo bash scripts/setup-docker-firewall.sh</code>
+              </div>
+              <InfoBox variant="blue" className="text-[10px] p-2">
+                This adds a UFW rule to allow traffic from Docker networks (172.16.0.0/12) to host services. 
+                It does NOT expose any ports to external networks.
+              </InfoBox>
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">After Setup: Access Methods</div>
+              <div className="space-y-2 text-[10px]">
+                <div className="p-2 bg-black/30 rounded-lg border border-white/10">
+                  <span className="text-white/80 font-semibold">Docker Containers:</span>
+                  <code className="text-cyan-300 ml-2 font-mono">http://host.docker.internal:8084</code>
+                  <div className="text-white/40 text-[9px] mt-1">Requires extra_hosts in docker-compose</div>
+                </div>
+                <div className="p-2 bg-black/30 rounded-lg border border-white/10">
+                  <span className="text-white/80 font-semibold">LAN Devices:</span>
+                  <code className="text-cyan-300 ml-2 font-mono">http://HOST_IP:8084</code>
+                  <div className="text-white/40 text-[9px] mt-1">Replace HOST_IP with your server's LAN IP</div>
+                </div>
+                <div className="p-2 bg-black/30 rounded-lg border border-white/10">
+                  <span className="text-white/80 font-semibold">Same Machine:</span>
+                  <code className="text-cyan-300 ml-2 font-mono">http://localhost:8084</code>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Test External Access</div>
+            <CommandWithOutput 
+              command="make test-external-access"
+              description="Run diagnostic to verify Docker containers can reach Cortex"
+              onCopy={copyToClipboard}
+            />
+          </div>
+        </Card>
+      </section>
+
       {/* Common Issues */}
       <section className="space-y-3">
         <SectionTitle variant="red" className="text-[10px]">Common Environment Issues</SectionTitle>
@@ -321,6 +379,22 @@ export default function EnvironmentDiagnostics() {
               "Check CORTEX_MODELS_DIR_HOST environment variable"
             ]}
             color="emerald"
+          />
+
+          <IssueCard 
+            issue="Docker container cannot reach Cortex (timeout)"
+            causes={[
+              "UFW firewall blocking Docker bridge traffic",
+              "Missing extra_hosts configuration",
+              "Cortex gateway not running"
+            ]}
+            solutions={[
+              "Run: make setup-firewall (one-time setup for UFW)",
+              "Add extra_hosts: ['host.docker.internal:host-gateway'] to docker-compose",
+              "Verify Cortex is running: make status",
+              "Test connectivity: curl http://HOST_IP:8084/health"
+            ]}
+            color="cyan"
           />
         </div>
       </section>

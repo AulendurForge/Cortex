@@ -43,6 +43,8 @@ nav:
   - API:
       - OpenAI-compatible: api/openai-compatible.md
       - Admin API: api/admin-api.md
+  - Integration:
+      - External Applications: integration/external-applications.md
   - Operations:
       - Deployments: operations/deployments.md
       - Offline Deployment: operations/offline-deployment.md

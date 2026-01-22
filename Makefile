@@ -420,7 +420,23 @@ watch: ## Watch container status (refresh every 2s)
 
 # ============================================================================
 # Quick Start Helpers
-# ============================================================================sup
+# ============================================================================
+
+setup-firewall: ## Enable Docker containers to access host services (requires sudo)
+	@echo "$(COLOR_BOLD)Configuring firewall for Docker-to-host access...$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_YELLOW)This requires sudo access.$(COLOR_RESET)"
+	@echo "Run: sudo bash scripts/setup-docker-firewall.sh"
+	@echo ""
+	@echo "$(COLOR_BLUE)Why is this needed?$(COLOR_RESET)"
+	@echo "  Cortex gateway uses host network mode for universal access."
+	@echo "  UFW firewall blocks Docker container traffic by default."
+	@echo "  This one-time setup allows containers to reach Cortex."
+	@echo ""
+	@sudo bash scripts/setup-docker-firewall.sh
+
+test-external-access: ## Test Cortex accessibility from Docker containers
+	@bash scripts/test-external-access.sh
 
 quick-start: build up ## Quick start: build and up with automatic admin bootstrap
 	@echo ""
@@ -538,4 +554,45 @@ export-images: prepare-offline ## Alias for prepare-offline
 import-images: load-offline ## Alias for load-offline
 
 offline-status: verify-offline ## Alias for verify-offline
+
+# ============================================================================
+# External Application Integration
+# ============================================================================
+
+connect-network: ## Connect Cortex to an external Docker network (NETWORK=name)
+ifndef NETWORK
+	@echo "$(COLOR_BOLD)Usage:$(COLOR_RESET) make connect-network NETWORK=<network-name>"
+	@echo ""
+	@echo "$(COLOR_BLUE)Available Docker networks:$(COLOR_RESET)"
+	@docker network ls --format "  {{.Name}}" | grep -v "^  none$$\|^  host$$\|^  bridge$$"
+	@echo ""
+	@echo "$(COLOR_BOLD)Example:$(COLOR_RESET)"
+	@echo "  make connect-network NETWORK=afwi-multi-agent-generative-engine_app-network"
+else
+	@bash scripts/connect-external-network.sh $(NETWORK)
+endif
+
+test-external: ## Run external access diagnostic tests
+	@bash scripts/test-external-access.sh
+
+integration-guide: ## Show integration guide for external applications
+	@echo "$(COLOR_BOLD)External Application Integration Guide$(COLOR_RESET)"
+	@echo ""
+	@echo "$(COLOR_BLUE)For applications running in Docker containers (like MAGE):$(COLOR_RESET)"
+	@echo ""
+	@echo "  1. Connect Cortex to your application's network:"
+	@echo "     $(COLOR_GREEN)make connect-network NETWORK=your-app-network$(COLOR_RESET)"
+	@echo ""
+	@echo "  2. Configure your application to use:"
+	@echo "     $(COLOR_GREEN)Cortex URL: http://cortex-gateway-1:8084/v1$(COLOR_RESET)"
+	@echo ""
+	@echo "  3. Create an API key at: http://$(HOST_IP):3001/keys"
+	@echo ""
+	@echo "$(COLOR_BLUE)API Endpoints:$(COLOR_RESET)"
+	@echo "  GET  /v1/models            - List available models"
+	@echo "  POST /v1/chat/completions  - Chat completions (streaming supported)"
+	@echo "  POST /v1/embeddings        - Generate embeddings"
+	@echo ""
+	@echo "$(COLOR_BLUE)Documentation:$(COLOR_RESET)"
+	@echo "  See: docs/integration/external-applications.md"
 

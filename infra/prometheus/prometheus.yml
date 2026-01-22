@@ -2,9 +2,10 @@ global:
   scrape_interval: 10s
 
 scrape_configs:
+  # Gateway runs with host network mode, accessible via host.docker.internal
   - job_name: 'gateway'
     static_configs:
-      - targets: ['gateway:8084']
+      - targets: ['host.docker.internal:8084']
   - job_name: 'vllm-gen'
     static_configs:
       - targets: ['vllm-gen:8000']

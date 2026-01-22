@@ -675,22 +675,22 @@ async def start_model(model_id: int, _: dict = Depends(require_admin)):
             for attempt in range(poll_attempts):
                 try:
                     req = urllib.request.Request(health_url, method='GET')
-                    with urllib.request.urlopen(req, timeout=2) as resp:
+                    with urllib.request.urlopen(req, timeout=5) as resp:
                         if resp.status == 200:
                             is_ready = True
                             break
                         elif resp.status == 503:
-                            # Engine dead - update state
-                            await session.execute(update(Model).where(Model.id == model_id).values(state="failed"))
-                            await session.commit()
-                            return {"status": "failed", "container": name, "port": host_port, "error": "Engine dead (503)"}
+                            # 503 during startup usually means model is still loading
+                            # Only treat as failed if we've exhausted all attempts
+                            # vLLM returns 503 while loading, this is normal
+                            logger.debug(f"Model {model_id} health check returned 503 (attempt {attempt+1}/{poll_attempts}) - still loading")
                 except urllib.error.HTTPError as e:
                     if e.code == 503:
-                        await session.execute(update(Model).where(Model.id == model_id).values(state="failed"))
-                        await session.commit()
-                        return {"status": "failed", "container": name, "port": host_port, "error": "Engine dead (503)"}
-                except Exception:
-                    pass  # Health endpoint not ready yet - expected during loading
+                        # 503 is expected during model loading - don't fail immediately
+                        logger.debug(f"Model {model_id} health check HTTPError 503 (attempt {attempt+1}/{poll_attempts}) - still loading")
+                except Exception as poll_err:
+                    # Health endpoint not ready yet - expected during loading
+                    logger.debug(f"Model {model_id} health check error (attempt {attempt+1}/{poll_attempts}): {poll_err}")
                 await asyncio.sleep(2)
             
             # Update state based on health check result
@@ -708,10 +708,25 @@ async def start_model(model_id: int, _: dict = Depends(require_admin)):
             # Include request defaults and engine type for Plane C (Phase 1)
             try:
                 if m.served_model_name and host_port:
-                    # Prefer direct container address on the compose network for reliability
+                    # Determine correct URL based on gateway network mode:
+                    # - If gateway is on host network, use localhost:host_port
+                    # - If gateway is on docker bridge, use container_name:8000
+                    # Check if we can resolve the container name (docker bridge)
+                    # or fall back to localhost (host network)
+                    import socket
+                    try:
+                        socket.gethostbyname(name)
+                        # Container name resolves - we're on the same Docker network
+                        model_url = f"http://{name}:8000"
+                    except socket.gaierror:
+                        # Container name doesn't resolve - gateway is on host network
+                        # Use localhost with the host-mapped port
+                        model_url = f"http://127.0.0.1:{host_port}"
+                        logger.info(f"Model {model_id}: Using host network URL {model_url} (container name not resolvable)")
+                    
                     register_model_endpoint(
                         m.served_model_name, 
-                        f"http://{name}:8000", 
+                        model_url, 
                         m.task or "generate",
                         engine_type=getattr(m, 'engine_type', 'vllm'),
                         request_defaults_json=getattr(m, 'request_defaults_json', None),
@@ -1101,7 +1116,8 @@ async def model_readiness(model_id: int, _: dict = Depends(require_admin)):
                 logger.debug(f"Container status check for {m.container_name}: {e}")
             
             # Container exists and running, check if health endpoint responds
-            result = await check_model_readiness(m.container_name, m.served_model_name)
+            # Pass host port for when gateway is on host network
+            result = await check_model_readiness(m.container_name, m.served_model_name, host_port=m.port)
             if result.status == "ready":
                 # Model is now ready - update state to running
                 await session.execute(update(Model).where(Model.id == model_id).values(state="running"))
@@ -1122,6 +1138,6 @@ async def model_readiness(model_id: int, _: dict = Depends(require_admin)):
         if not m.container_name:
             return ReadinessResp(status="error", detail="no_container")
         
-        # Delegate to testing service
-        return await check_model_readiness(m.container_name, m.served_model_name)
+        # Delegate to testing service (pass host port for host network mode)
+        return await check_model_readiness(m.container_name, m.served_model_name, host_port=m.port)
 
