@@ -165,6 +165,10 @@ make validate          # Verify configuration
    - May miss configuration issues
    - **Solution**: Always run `make validate` after startup
 
+5. ❌ **Forgetting about firewall (Linux)**
+   - UFW blocks connections by default
+   - **Solution**: See "Firewall Setup" section below
+
 ---
 
 ## 💡 Pro Tips
@@ -198,6 +202,36 @@ API Gateway: http://192.168.1.181:8084
 - Detect which IP the user accessed it from
 - Call the gateway at the correct IP
 - Everything just works!
+
+---
+
+## 🔥 Firewall Setup (Linux Only)
+
+**Can't access Cortex from other devices?** You may need to configure UFW firewall:
+
+```bash
+# Check if UFW is blocking (look for "DPT=3001" or "DPT=8084")
+sudo tail -20 /var/log/ufw.log | grep BLOCK
+
+# Allow Cortex ports
+sudo ufw allow 3001/tcp comment 'Cortex Admin UI'
+sudo ufw allow 8084/tcp comment 'Cortex API Gateway'
+sudo ufw reload
+
+# Or allow your entire local network
+sudo ufw allow from 192.168.0.0/16 comment 'Local network'
+sudo ufw reload
+
+# Verify
+sudo ufw status
+```
+
+**For Docker containers accessing Cortex:**
+```bash
+make setup-firewall  # Allows Docker container traffic
+```
+
+📖 **Full guide**: `docs/operations/network-access.md`
 
 ---
 

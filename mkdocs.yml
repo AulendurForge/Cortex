@@ -46,6 +46,7 @@ nav:
   - Integration:
       - External Applications: integration/external-applications.md
   - Operations:
+      - Network Access: operations/network-access.md
       - Deployments: operations/deployments.md
       - Offline Deployment: operations/offline-deployment.md
       - Makefile Guide: operations/makefile-guide.md

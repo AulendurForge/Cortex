@@ -49,6 +49,67 @@ Health check:
 curl http://localhost:8084/health
 ```
 
+## Network Access (Serving to LAN)
+
+Cortex runs with **host network mode** for the gateway, making it accessible from any device on your network.
+
+### Access URLs
+
+| From | Admin UI | API Gateway |
+|------|----------|-------------|
+| Same machine | `http://localhost:3001` | `http://localhost:8084` |
+| LAN devices | `http://<HOST_IP>:3001` | `http://<HOST_IP>:8084` |
+| Docker containers | `http://host.docker.internal:8084` | (with extra_hosts) |
+
+Get your host IP:
+```bash
+make info    # Shows detected IP and access URLs
+```
+
+### Firewall Configuration (Linux/UFW)
+
+If you have UFW firewall enabled, allow Cortex ports:
+
+```bash
+# Allow Cortex ports
+sudo ufw allow 3001/tcp comment 'Cortex Admin UI'
+sudo ufw allow 8084/tcp comment 'Cortex API Gateway'
+sudo ufw reload
+
+# Or allow your entire local network
+sudo ufw allow from 192.168.0.0/16 comment 'Local network'
+sudo ufw reload
+
+# Verify
+sudo ufw status
+```
+
+**Troubleshoot firewall issues:**
+```bash
+# Check for blocked connections
+sudo tail -20 /var/log/ufw.log | grep BLOCK
+```
+
+### Docker Container Access
+
+For applications running in Docker containers to reach Cortex:
+
+```yaml
+# docker-compose.yaml
+services:
+  your-app:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OPENAI_API_BASE: "http://host.docker.internal:8084/v1"
+      OPENAI_API_KEY: "your-cortex-api-key"
+```
+
+On Linux with UFW, also run:
+```bash
+make setup-firewall  # Allows Docker container traffic to host
+```
+
 ## Bootstrap an admin and login (dev cookie)
 ```bash
 curl -X POST http://localhost:8084/admin/bootstrap-owner \

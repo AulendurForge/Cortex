@@ -228,7 +228,32 @@ make db-backup
 1. Get your host IP: `make info`
 2. Use that IP (e.g., `http://192.168.1.181:3001`), NOT `localhost`
 3. Ensure the other computer is on the same network
-4. Check firewall allows ports 3001 and 8084
+4. **Check firewall allows ports 3001 and 8084** (see below)
+
+**🔥 Firewall blocking network access? (Most common issue)**
+
+If you have UFW firewall enabled on Linux, you need to allow Cortex ports:
+
+```bash
+# Allow Cortex ports from your local network
+sudo ufw allow 3001/tcp comment 'Cortex Admin UI'
+sudo ufw allow 8084/tcp comment 'Cortex API Gateway'
+sudo ufw reload
+
+# Or allow your entire local network (recommended)
+sudo ufw allow from 192.168.0.0/16 comment 'Local network access'
+sudo ufw reload
+
+# Verify rules
+sudo ufw status
+```
+
+**How to tell if firewall is the issue:**
+```bash
+# Check if UFW is blocking connections
+sudo tail -20 /var/log/ufw.log | grep BLOCK
+# If you see "DPT=3001" or "DPT=8084", firewall is blocking
+```
 
 **Services won't start?**
 ```bash

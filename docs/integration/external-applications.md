@@ -42,19 +42,46 @@ Cortex gateway runs with **host network mode**, meaning it binds directly to the
 
 ## First-Time Setup (Linux Only)
 
-On Linux systems with UFW firewall enabled, you need to allow Docker containers to reach the host:
+### 1. Allow Network Access (Required for LAN access)
+
+If UFW firewall is enabled, allow Cortex ports:
+
+```bash
+# Allow Cortex ports from your network
+sudo ufw allow 3001/tcp comment 'Cortex Admin UI'
+sudo ufw allow 8084/tcp comment 'Cortex API Gateway'
+sudo ufw reload
+```
+
+**Or** allow your entire local network:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 comment 'Local network'
+sudo ufw reload
+```
+
+### 2. Allow Docker Container Access (Required for Docker apps)
+
+If external applications running in Docker containers need to reach Cortex:
 
 ```bash
 cd /path/to/Cortex
 make setup-firewall
 ```
 
-This is a **one-time** setup that:
-- Adds a UFW rule to allow traffic from Docker networks (172.16.0.0/12)
-- Does NOT expose any ports to external networks
-- Is safe for development and production environments
+This adds a UFW rule to allow traffic from Docker networks (172.16.0.0/12).
 
-**Without this setup**, Docker containers cannot reach services on the host, including Cortex.
+### Verify Setup
+
+```bash
+# Check UFW rules
+sudo ufw status
+
+# Test connectivity from another machine
+curl http://<HOST_IP>:8084/health
+```
+
+**Without this setup**, connections from LAN devices or Docker containers will timeout.
 
 ## API Endpoints
 
