@@ -42,6 +42,12 @@ offline-images/
 *.tar
 !docs/**/*.tar
 
+# Python wheelhouse (cached by prepare-offline, not tracked in git)
+backend/wheels/*.whl
+backend/wheels/*.tar.gz
+backend/wheels/*.zip
+!backend/wheels/.gitkeep
+
 # Internal planning docs
 plans/*
 *Plan.md
