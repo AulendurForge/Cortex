@@ -851,9 +851,15 @@ async def apply_model_changes(model_id: int, _: dict = Depends(require_admin)):
         await session.commit()
         try:
             if m.served_model_name and host_port:
+                import socket
+                try:
+                    socket.gethostbyname(name)
+                    model_url = f"http://{name}:8000"
+                except socket.gaierror:
+                    model_url = f"http://127.0.0.1:{host_port}"
                 register_model_endpoint(
-                    m.served_model_name, 
-                    f"http://{name}:8000", 
+                    m.served_model_name,
+                    model_url,
                     m.task or "generate",
                     engine_type=getattr(m, 'engine_type', 'vllm'),
                     request_defaults_json=getattr(m, 'request_defaults_json', None),
@@ -1029,10 +1035,19 @@ async def test_model(model_id: int, _: dict = Depends(require_admin)):
         if not m.container_name:
             raise HTTPException(status_code=400, detail="No container name found for model")
         
-        # Get model URL (prefer container name for internal routing)
+        # Get model URL — registry first, then DNS-aware fallback.
+        # Gateway may run on host network where container names don't resolve.
         registry = _get_registry()
         model_entry = registry.get(m.served_model_name, {})
-        base_url = model_entry.get("url") or f"http://{m.container_name}:8000"
+        base_url = model_entry.get("url")
+        if not base_url:
+            import socket
+            try:
+                socket.gethostbyname(m.container_name)
+                base_url = f"http://{m.container_name}:8000"
+            except socket.gaierror:
+                host_port = m.port or 8000
+                base_url = f"http://127.0.0.1:{host_port}"
         
         # Determine test type from task field
         test_type = "embeddings" if m.task and m.task.lower().startswith("embed") else "chat"
