@@ -52,17 +52,30 @@ die()  { err "$*"; echo ""; echo "Aborting."; exit 1; }
 SUDO=""; SUDO_PID=""
 start_sudo() {
   if [ "$(id -u)" -eq 0 ]; then SUDO=""; ok "Running as root"; return 0; fi
-  # Only ask for sudo if we genuinely cannot write where we need to.
-  local probe="$MODELS_DIR"
+
+  # Two reasons we might need sudo: writing into MODELS_DIR, and READING
+  # the package. An export done under a hardened root umask leaves model
+  # files mode 0600 root-owned, unreadable to a normal account.
+  local need_write=1 need_read=0 probe sample
+  probe="$MODELS_DIR"
   [ -d "$probe" ] || probe="$(dirname "$MODELS_DIR")"
-  if [ -d "$probe" ] && [ -w "$probe" ]; then
+  [ -d "$probe" ] && [ -w "$probe" ] && need_write=0
+
+  sample="$(find "$PKG/model" -type f -name '*.safetensors' 2>/dev/null \
+            | head -1)"
+  [ -n "$sample" ] && [ ! -r "$sample" ] && need_read=1
+
+  if [ "$need_write" -eq 0 ] && [ "$need_read" -eq 0 ]; then
     SUDO=""
-    ok "No sudo needed - $probe is writable by $(whoami)"
+    ok "No sudo needed - $probe is writable and the package is readable"
     return 0
   fi
   SUDO="sudo"
   echo ""
-  echo "sudo is needed to write into $MODELS_DIR."
+  [ "$need_read" -eq 1 ] && \
+    echo "The package files are root-owned; sudo is needed to read them."
+  [ "$need_write" -eq 1 ] && \
+    echo "sudo is needed to write into $MODELS_DIR."
   echo "You will be prompted once now; the ticket is kept alive after."
   if ! sudo -v; then
     die "sudo authentication failed. Re-run with sudo access, or set
@@ -142,14 +155,27 @@ log "Logging to: $LOG"
 echo ""
 [ -f "$PKG/MANIFEST.txt" ] && cat "$PKG/MANIFEST.txt"
 
+start_sudo
+
 # =====================================================================
 step "1/7  Verifying package integrity"
 if [ "$SKIP_VERIFY" = "1" ]; then
   warn "Checksum verification skipped by request"
 elif [ -f "$PKG/SHA256SUMS" ]; then
-  log "Checking $(wc -l < "$PKG/SHA256SUMS") files - this reads ~85 GiB, be patient"
-  if ( cd "$PKG" && sha256sum -c --quiet SHA256SUMS ); then
-    ok "All checksums match"
+  N_SUMS="$(wc -l < "$PKG/SHA256SUMS" 2>/dev/null || echo 0)"
+  N_FILES="$(cd "$PKG" && find images model scripts -type f 2>/dev/null | wc -l)"
+  log "Manifest lists $N_SUMS files; package contains $N_FILES"
+  if [ "$N_SUMS" -lt "$N_FILES" ]; then
+    err "MANIFEST IS INCOMPLETE: only $N_SUMS of $N_FILES files are listed."
+    err "The export could not read some files (a hardened root umask makes"
+    err "copies 0600 root-owned). Those files are NOT being verified."
+    err "Regenerate on the source machine, or accept the risk with"
+    err "--skip-verify after checking sizes by hand."
+    warn "Continuing, but integrity is only partially proven."
+  fi
+  log "Verifying - this reads ~85 GiB, be patient"
+  if ( cd "$PKG" && $SUDO sha256sum -c --quiet SHA256SUMS ); then
+    ok "All listed checksums match"
   else
     err "Checksum mismatch - the transfer is damaged."
     err "Re-copy the package rather than proceeding."
@@ -241,8 +267,6 @@ else
   ok "Docker storage has room"
 fi
 
-start_sudo
-
 # =====================================================================
 step "3/7  Loading Docker images"
 IMG_TAR="$(find "$PKG/images" -name '*.tar' 2>/dev/null | head -1)"
@@ -283,9 +307,17 @@ else
       err "rsync errors - re-run this script to resume"
     fi
   else
-    warn "rsync missing - using cp (no resume)"
+    warn "rsync missing - using tar (preserves modes, shows progress)"
     $SUDO mkdir -p "$DST"
-    $SUDO cp -r "$SRC/." "$DST/" && ok "Model copied" || err "cp failed"
+    N_SRC="$(find "$SRC" -maxdepth 1 -type f | wc -l)"
+    log "Copying $N_SRC files - roughly 15 minutes for 75 GiB"
+    if ( cd "$SRC" && $SUDO tar cf - . ) \
+       | ( cd "$DST" && $SUDO tar xvf - ) \
+       | awk '{n++; printf "\r  %d files copied", n} END{print ""}'; then
+      ok "Model copied"
+    else
+      err "tar copy failed"
+    fi
   fi
 
   log "Normalising ownership and permissions"

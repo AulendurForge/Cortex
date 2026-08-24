@@ -1597,34 +1597,387 @@ needs to exist on the unclassified server.
 
 ### On the unclassified server
 
+### Mount the drive first
+
+**Over SSH there is no desktop auto-mounter.** Plugging a drive into a headless
+server makes the kernel see it, but nothing mounts it — `/media/afwi/TRANSFER`
+will not exist until you create and mount it yourself. This is the most common
+first-run stumble.
+
+```bash
+lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT
+```
+
+`-e7` hides snap loop devices, which otherwise bury the real disks. Look for a
+device matching your drive's size with **no MOUNTPOINT**:
+
+```
+NAME          SIZE FSTYPE LABEL      MOUNTPOINT
+sda         465.8G
+└─sda1      465.8G ext4   TRANSFER              <- this one
+nvme0n1     931.5G
+└─nvme0n1p3 930.9G ext4              /
+```
+
+If nothing new appears, confirm the kernel saw the device at all:
+
+```bash
+sudo dmesg | tail -20
+```
+
+> **Two rules, both learned the hard way.**
+>
+> **Never touch a partition that already shows a MOUNTPOINT.** In the sample
+> above `sda1` is `/boot/efi` — the EFI System Partition. Mounting it a second
+> time somewhere else, or writing to it, can leave the machine unbootable. The
+> `sdX1` in the commands below is a placeholder, *not* a device name to copy.
+>
+> **Mount the partition, not the disk** — `/dev/sdX1`, not `/dev/sdX`. Confirm
+> size and label before acting: on a server with several disks, mounting the
+> wrong one is a nuisance and formatting the wrong one is unrecoverable.
+>
+> The export script refuses to run in three cases, each with its own advice:
+> the target is a second mount of a system partition; the target *is* a system
+> mount point; or the target is a plain directory on the system disk because the
+> drive was never mounted. That last one matters most — an empty
+> `/media/afwi/TRANSFER` left behind after a failed mount looks fine to `df`,
+> and writing 110 GiB there would fill the root filesystem. Deliberate staging
+> on internal storage needs `ALLOW_SYSTEM_DISK=1`.
+
+#### If no removable device appears at all
+
+A listing showing only your system disk means the kernel never saw the drive —
+there is nothing to mount yet:
+
+```
+sda                          5.8T
+├─sda1                         1G vfat         /boot/efi
+├─sda2                         2G ext4         /boot
+└─sda3                       5.8T crypto_LUKS
+  └─dm_crypt-0               5.8T LVM2_member
+    └─ubuntu--vg-ubuntu--lv  2.1T ext4         /
+```
+
+Work down this list:
+
+```bash
+lsusb                                    # does the USB layer see anything?
+sudo dmesg | grep -iE 'usb|sd[b-z]|scsi' | tail -30
+```
+
+Filter `dmesg` like that — an unfiltered `tail` on a Docker host shows only
+container veth churn and tells you nothing.
+
+Then watch the kernel live while you re-seat the cable:
+
+```bash
+sudo dmesg -w
+```
+
+Unplug and replug. A healthy attach prints, in order:
+
+```
+usb 2-1: new SuperSpeed USB device number 3 using xhci_hcd
+usb-storage 2-1:1.0: USB Mass Storage device detected
+scsi 0:0:0:0: Direct-Access  ...
+sd 0:0:0:0: [sdb] Attached SCSI disk        <- the line that matters
+```
+
+Two failure shapes, with different causes:
+
+**Nothing at all** — the drive is not reaching the machine. Try another cable,
+another port, and confirm it is plugged into the server itself rather than a
+monitor hub, dock, or KVM that does not pass storage through.
+
+**The bridge enumerates but no disk attaches** — you see `New USB device found`
+with a manufacturer and serial, but no `Attached SCSI disk` afterwards:
+
+```
+usb 1-12: new high-speed USB device number 9 using xhci_hcd
+usb 1-12: New USB device found, idVendor=152d, idProduct=0583
+usb 1-12: Product: External
+usb 1-12: Manufacturer: JMicron
+                                    <- and then nothing
+```
+
+The enclosure's controller powered up; the disk behind it did not. Note
+**`high-speed`** — that is USB 2.0, which supplies only 500 mA. A USB-to-NVMe
+bridge (JMicron JMS583 and similar) enumerates happily on that budget but often
+cannot bring up the SSD behind it. Confirm where it landed:
+
+```bash
+lsusb -t
+```
+
+If your drive appears under a `480M` branch it is on USB 2.0. Move it to a USB 3
+port directly on the server chassis and use the cable that shipped with the
+enclosure — a USB 2 cable forces 2.0 regardless of the port. A successful
+reattach says `SuperSpeed` (or `SuperSpeedPlus`) instead of `high-speed`.
+
+#### `Class=Mass Storage, Driver=[none]` — USB storage is blocked
+
+If `lsusb -t` shows the device recognised as storage but with **no driver bound**:
+
+```
+|__ Port 012: Dev 009, If 0, Class=Mass Storage, Driver=[none], 480M
+```
+
+the kernel identified it correctly but attached no driver. This is not a power,
+cable, or port problem. There are two very different causes, and it is worth
+checking the boring one first.
+
+**Cause 1 — the module simply is not loaded.** The most common case, and a
+30-second fix. `usb-storage` is not always auto-loaded on server installs, and
+a UAS-capable enclosure on a USB 3 port wants `uas` as well:
+
+```bash
+lsmod | grep -E 'usb_storage|uas'        # nothing = not loaded
+sudo modprobe usb-storage
+sudo modprobe uas
+```
+
+Then replug the drive, or force a rescan without touching the cable:
+
+```bash
+sudo udevadm trigger --subsystem-match=usb --action=add
+lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT
+```
+
+To make it stick across reboots, add the names to `/etc/modules-load.d/`:
+
+```bash
+printf 'usb-storage\nuas\n' | sudo tee /etc/modules-load.d/usb-storage.conf
+```
+
+**Cause 2 — a hardening control is blocking it.** If `modprobe` succeeds but no
+driver ever binds, or `modprobe` itself fails, the block is deliberate.
+Disabling USB mass storage is a standard DISA STIG / security-baseline
+requirement, so on a FIPS-enabled server this is entirely plausible.
+
+Confirm which mechanism is in play:
+
+```bash
+# 1. Is the module loaded? Is it even installable?
+lsmod | grep -E 'usb_storage|uas'
+modinfo usb-storage 2>&1 | head -3
+
+# 2. Is it blacklisted or stubbed out?
+#    modprobe -c dumps the EFFECTIVE merged config from every source -
+#    use this rather than grepping directories, which misses rules in
+#    /run/modprobe.d, /usr/lib/modprobe.d and vendor paths.
+modprobe -c | grep -iE 'usb_storage|uas'
+sudo grep -rn 'usb_storage' /etc/modprobe.d/ /run/modprobe.d/ \
+     /usr/lib/modprobe.d/ /lib/modprobe.d/ 2>/dev/null
+
+# 3. Is USBGuard enforcing a policy?
+systemctl is-active usbguard 2>/dev/null
+sudo usbguard list-devices 2>/dev/null | head
+
+# 4. Is authorization denied by default at the bus level?
+cat /sys/bus/usb/devices/usb1/authorized_default 2>/dev/null
+grep -o 'usbcore[^ ]*' /proc/cmdline
+
+# 5. Are modules disabled outright?
+cat /proc/sys/kernel/modules_disabled 2>/dev/null
+
+# 6. Anything in the runtime config directory?
+grep -rniE 'usb.?storage|uas' /run/modprobe.d/ 2>/dev/null
+```
+
+Read the results together:
+
+| Finding | Means |
+|---|---|
+| `lsmod` empty, `modinfo` finds the `.ko`, **`modprobe -c` shows no rule**, `usbguard inactive`, `authorized_default` = `1` | **Nothing is blocking it** — Cause 1. Just `modprobe`. |
+| `modprobe` fails with `Error running install command '/bin/false'` | Stubbed by policy — Cause 2, regardless of what a directory grep showed |
+| A `blacklist` or `install ... /bin/true` line | Deliberately stubbed — Cause 2 |
+| `usbguard` active | Policy-managed — Cause 2 |
+| `authorized_default` = `0` | Devices denied at the bus — Cause 2 |
+| `modules_disabled` = `1` | No module can be loaded until reboot — Cause 2 |
+
+A line such as `install usb_storage /bin/true` or `install usb_storage
+/bin/false` is the classic stub. With `/bin/true`, `modprobe` appears to succeed
+and quietly does nothing. With `/bin/false` it fails loudly:
+
+```
+modprobe: ERROR: command_do() Error running install command '/bin/false'
+          for module usb_storage: retcode 1
+modprobe: ERROR: could not insert 'usb_storage': Invalid argument
+```
+
+That error **is** the confirmation — it names the install command and the module.
+Note the underscore: the rule targets `usb_storage`, while the file on disk is
+`usb-storage.ko.zst`. Both spellings resolve to the same module, so search for
+both.
+
+This stub is what the CIS and DISA STIG benchmarks prescribe, and Ubuntu Pro's
+Ubuntu Security Guide (`usg`) applies it when a hardening profile is enabled. On
+a machine carrying a livepatch/Pro subscription and a `-fips` kernel, assume it
+was applied deliberately as part of the baseline.
+
+> **Stop here and talk to your ISSO or security lead before changing anything.**
+> This control was almost certainly applied on purpose. Removing it — even
+> briefly — may be a documented finding, may require an approved exception, and
+> on some networks is itself a reportable event. The technical fix is easy; that
+> is not the same as it being the right thing to do.
+
+If the control is lifted with approval, the module can be loaded for the
+duration of the transfer and unloaded afterwards:
+
+```bash
+sudo modprobe -i usb-storage      # -i ignores an 'install ... /bin/true' stub
+sudo modprobe -i uas              # for UAS-capable enclosures
+sudo dmesg -w                     # replug and watch for 'Attached SCSI disk'
+# ... run the export ...
+sudo umount /media/afwi/TRANSFER
+sudo modprobe -r uas usb-storage  # restore the original posture
+```
+
+Verify afterwards that the baseline is back in place — `lsmod` should again show
+nothing for `usb_storage`.
+
+#### If USB storage stays prohibited
+
+That is a legitimate outcome, and the package does not have to move on a USB
+drive. Anything that reproduces the directory tree byte-for-byte works, because
+the import script verifies `SHA256SUMS` on arrival regardless of how the files
+travelled:
+
+- **The organisation's approved cross-domain transfer process** — the right
+  answer where one exists.
+- **A network path to a staging host**, if any is permitted:
+  `rsync -a --partial ~/transfer-staging/ user@staging:/path/`
+- **An approved write-once medium** produced through the sanctioned workflow.
+
+To stage the package on internal storage first and hand it to whatever process
+is approved:
+
+```bash
+mkdir -p ~/nemotron-transfer
+ALLOW_SYSTEM_DISK=1 ./nemotron-export-to-usb.sh ~/nemotron-transfer
+```
+
+Check free space first — the package needs ~110 GiB.
+
+Speed matters here too, though less than people fear: the ~110 GiB payload takes
+roughly **45 minutes at USB 2.0 speeds** versus **5–15 minutes on USB 3**. The
+export script measures write throughput before it starts, prints an ETA, and
+asks for confirmation below 80 MB/s.
+
+Nothing in this document can proceed until `lsblk` shows a new device.
+
+Then create the mount point and mount, with options depending on the filesystem:
+
+```bash
+sudo install -d -m 755 /media/afwi
+sudo install -d -m 755 /media/afwi/TRANSFER
+```
+
+> **Use `install -d -m 755`, not `mkdir -p`.** Hardened baselines set root's
+> umask to `077`, so `sudo mkdir -p /media/afwi/TRANSFER` creates
+> `/media/afwi` as `drwx------ root root`. The mount then succeeds and looks
+> healthy in `findmnt`, but your own account cannot traverse the parent:
+>
+> ```
+> df: /media/afwi/TRANSFER: Permission denied
+> ```
+>
+> `install -d -m` sets the mode explicitly and ignores the umask. If you already
+> hit this, `sudo chmod 755 /media/afwi` fixes it without remounting.
+
+**ext4 / xfs** — mount, then take ownership:
+
+```bash
+sudo mount /dev/sdX1 /media/afwi/TRANSFER
+sudo chown $(id -un):$(id -gn) /media/afwi/TRANSFER
+```
+
+**exFAT / NTFS / FAT** — these have no UNIX ownership, so it is fixed at mount
+time and `chown` does nothing:
+
+```bash
+sudo mount -o uid=$(id -u),gid=$(id -g) /dev/sdX1 /media/afwi/TRANSFER
+```
+
+exFAT needs kernel support or `exfatprogs` (present on Ubuntu 22.04+); NTFS
+needs `ntfs-3g`. If the mount fails with "unknown filesystem type", that package
+is what is missing.
+
+Verify before running the export:
+
+```bash
+findmnt -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS /media/afwi/TRANSFER
+touch /media/afwi/TRANSFER/.writetest && rm /media/afwi/TRANSFER/.writetest \
+  && echo "writable OK"
+```
+
+You want ~110 GiB or more under AVAIL, and `writable OK`.
+
+> **If the drive is FAT32, reformat it.** The 4 GiB file-size cap cannot hold
+> 5 GiB model shards or a 30 GiB image archive, and the export script aborts on
+> detection. Reformatting **destroys everything on the drive** — confirm the
+> device letter twice:
+>
+> ```bash
+> sudo umount /dev/sdX1
+> sudo mkfs.ext4 -L TRANSFER /dev/sdX1
+> ```
+>
+> ext4 is the better choice here anyway: it preserves permissions, and both
+> servers are Linux.
+
+When the export finishes, unmount cleanly before unplugging — `sync` alone is
+not enough:
+
+```bash
+sudo umount /media/afwi/TRANSFER
+```
+
+### Running the export
+
 ```bash
 cd ~/repos/Cortex/scripts
 ./nemotron-export-to-usb.sh /media/afwi/TRANSFER
 ```
 
-Run with no arguments and it lists mounted removable candidates. Before
-writing anything it checks:
+Run with no arguments — or point it at a path that is not mounted — and it
+lists the block devices the kernel can see, with the exact mount commands for
+your filesystem. Before writing anything it checks:
 
 - **Filesystem type.** Aborts on FAT32 — the 4 GiB file cap cannot hold 5 GiB
-  shards or a 10 GiB image archive. exFAT, NTFS, and ext4 are all accepted;
+  shards. exFAT, NTFS, and ext4 are all accepted;
   for the two that lose UNIX permissions, the import side fixes ownership.
 - **Both images present**, weights present, **no Git-LFS pointer stubs** (it
   refuses to export a model with truncated shards).
 - **Free space**, computed from the actual model size with `.git` excluded plus
   the derived image's real uncompressed size.
 
-> **Size the drive at 128 GB or larger.** `docker save` writes *uncompressed*
-> layers, not the registry-compressed size — the `docker images` view that shows
-> `CONTENT SIZE 9.24GB` also shows `DISK USAGE 30GB`, and 30 GB is what lands on
-> the drive. Budget roughly **75 GiB weights + ~30 GiB images ≈ 110 GiB**. The
-> script computes this exactly and refuses to start if the drive is too small.
+> **Size the drive at 128 GB or larger.** Measured on `mage`, 24 Aug 2026:
+> **74 GiB weights + 8.5 GiB image archive = 84 GiB total**, onto a 466 GiB
+> drive. An earlier draft here predicted a ~30 GiB image archive from the
+> `DISK USAGE` column of `docker images`; the real `docker save` output was
+> 8.5 GiB, much closer to `CONTENT SIZE`. Do not size from either column — the
+> script reads the image's actual size and computes the requirement itself,
+> then refuses to start if the drive is too small.
 
 Then it saves both image tags into **one** archive so shared layers are stored
 once, rsyncs the weights (excluding `.git`), copies the scripts, the Dockerfile
 for rebuilding the derived image, and this document, writes `MANIFEST.txt`, and
 generates `SHA256SUMS` by reading everything back.
 
-Interrupted part-way? Re-run it — rsync resumes.
+Interrupted part-way? Re-run it — rsync resumes. Where rsync is not installed
+(it is absent on `mage`), the script falls back to `tar`, which preserves modes
+and reports progress but cannot resume.
+
+> **Watch the checksum line.** It now reads `N of M files checksummed`. If those
+> numbers differ, files were unreadable at export time and the manifest is
+> incomplete — the far side then verifies almost nothing. The cause is a
+> hardened root umask (`077`) making root-owned copies mode `0600`; the script
+> now runs `chmod -R a+rX` over the package before checksumming to prevent it.
+
+Also worth reclaiming after a successful export: the `.git` directory left in
+the model folder holds a second full copy of the weights (74 GiB on `mage`) and
+is deliberately not transferred. See §3.
 
 ### On the classified server
 

@@ -72,14 +72,113 @@ USB="${1:-}"
 if [ -z "$USB" ]; then
   echo "Usage: $0 /path/to/usb/mountpoint"
   echo ""
-  echo "Currently mounted removable candidates:"
-  lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT 2>/dev/null | grep -E '/media|/mnt' \
-    || echo "  (none detected - mount the drive first)"
+  echo "Block devices the kernel can see:"
+  lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | sed 's/^/  /'
+  echo ""
+  echo "A drive with no MOUNTPOINT still needs mounting - see section 15"
+  echo "of NEMOTRON_3_SUPER_DEPLOYMENT.md."
   exit 1
 fi
 
-[ -d "$USB" ] || die "Not a directory: $USB"
-[ -w "$USB" ] || die "Not writable: $USB  (check mount options / ownership)"
+show_devices() {
+  echo ""
+  echo "Block devices the kernel can see:"
+  lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | sed 's/^/    /'
+  echo ""
+}
+
+if [ ! -d "$USB" ]; then
+  err "Not a directory: $USB"
+  echo ""
+  echo "The drive is almost certainly just not mounted. Over SSH there is"
+  echo "no desktop auto-mounter, so removable media must be mounted by hand."
+  show_devices
+  echo "Find your drive above by SIZE and LABEL (it will have no MOUNTPOINT),"
+  echo "then mount it - replace sdX1 with the right PARTITION:"
+  echo ""
+  echo "    sudo mkdir -p \"$USB\""
+  echo ""
+  echo "  exFAT / NTFS / FAT - ownership is set at mount time:"
+  echo "    sudo mount -o uid=\$(id -u),gid=\$(id -g) /dev/sdX1 \"$USB\""
+  echo ""
+  echo "  ext4 / xfs - mount, then take ownership:"
+  echo "    sudo mount /dev/sdX1 \"$USB\""
+  echo "    sudo chown \$(id -un):\$(id -gn) \"$USB\""
+  echo ""
+  echo "Verify with:  df -h \"$USB\""
+  echo ""
+  echo "Aborting. Nothing was written to the drive."
+  exit 1
+fi
+
+# --- SAFETY: refuse anything that is not real removable media -----------
+# Two ways this goes wrong, and they need different advice:
+#   a) the target is a plain directory left behind after a failed mount
+#   b) a system partition (e.g. the EFI partition) got mounted there
+USB_SRC="$(findmnt -n -o SOURCE --target "$USB" 2>/dev/null | head -1)"
+ROOT_SRC="$(findmnt -n -o SOURCE --target / 2>/dev/null | head -1)"
+SYS_MNT=""
+if [ -n "$USB_SRC" ]; then
+  SYS_MNT="$(findmnt -n -o TARGET -S "$USB_SRC" 2>/dev/null \
+             | grep -Ex '/|/boot|/boot/efi|/usr|/var|/home|/etc' | head -1)"
+fi
+IS_MOUNTPOINT=0
+findmnt -n -o TARGET --mountpoint "$USB" >/dev/null 2>&1 && IS_MOUNTPOINT=1
+
+if [ -n "$SYS_MNT" ] || { [ -n "$ROOT_SRC" ] && [ "$USB_SRC" = "$ROOT_SRC" ]; }
+then
+  if [ "$IS_MOUNTPOINT" = "1" ] && [ "$USB" != "$SYS_MNT" ]; then
+    err "REFUSING TO RUN: $USB is a second mount of $USB_SRC,"
+    err "which is also mounted at ${SYS_MNT:-/} - a SYSTEM partition."
+    echo ""
+    echo "Writing here could damage the running system."
+    echo "Unmount the duplicate (this does NOT touch ${SYS_MNT:-/}):"
+    echo ""
+    echo "    sudo umount \"$USB\""
+  elif [ "$USB" = "$SYS_MNT" ]; then
+    err "REFUSING TO RUN: $USB is a SYSTEM mount point."
+    echo ""
+    echo "You pointed the script at the wrong directory. Do not unmount it."
+  else
+    err "REFUSING TO RUN: $USB is a plain directory on the system disk"
+    err "($ROOT_SRC) - nothing is mounted on it."
+    echo ""
+    echo "The drive was never mounted, so this would write ~110 GiB onto"
+    echo "the root filesystem and fill it."
+  fi
+  echo ""
+  echo "Find the removable drive and mount it first:"
+  echo "    lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT"
+  echo "    sudo mount /dev/sdX1 \"$USB\""
+  echo ""
+  if [ "${ALLOW_SYSTEM_DISK:-0}" = "1" ]; then
+    warn "ALLOW_SYSTEM_DISK=1 - continuing onto internal storage anyway"
+  else
+    echo "To stage on internal storage deliberately:"
+    echo "    ALLOW_SYSTEM_DISK=1 $0 \"$USB\""
+    echo ""
+    echo "Aborting. Nothing was written."
+    exit 1
+  fi
+fi
+
+if [ ! -w "$USB" ]; then
+  err "Mounted, but not writable by $(whoami): $USB"
+  echo ""
+  findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS --target "$USB" 2>/dev/null \
+    | sed 's/^/    /'
+  echo ""
+  echo "For exFAT/NTFS/FAT, ownership comes from the mount options, so"
+  echo "chown will not help - remount with your uid:"
+  echo "    sudo umount \"$USB\""
+  echo "    sudo mount -o uid=\$(id -u),gid=\$(id -g) /dev/sdX1 \"$USB\""
+  echo ""
+  echo "For ext4/xfs:"
+  echo "    sudo chown \$(id -un):\$(id -gn) \"$USB\""
+  echo ""
+  echo "Aborting. Nothing was written to the drive."
+  exit 1
+fi
 
 DEST="$USB/$PKG_NAME"
 LOG="$DEST/export-$START_TS.log"
@@ -189,6 +288,45 @@ if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
 fi
 ok "Sufficient space"
 
+# --- write-speed probe: catches USB 2.0, a failing drive, a slow card ---
+log "Measuring write speed (256 MiB test)..."
+# Time it ourselves rather than parsing dd's output: dd switches between
+# kB/s, MB/s and GB/s depending on speed and locale.
+PROBE="$USB/.cortex-speed-probe"
+SPEED_MBS=""
+T0="$(date +%s%N)"
+if dd if=/dev/zero of="$PROBE" bs=1M count=256 conv=fsync \
+     >/dev/null 2>&1; then
+  T1="$(date +%s%N)"
+  SPEED_MBS="$(awk -v a="$T0" -v b="$T1" \
+    'BEGIN{d=(b-a)/1e9; if(d>0) printf "%.0f", 256/d}')"
+fi
+rm -f "$PROBE"
+if [ -n "$SPEED_MBS" ]; then
+  ETA_H="$(awk -v k="$NEED_KB" -v s="$SPEED_MBS" \
+           'BEGIN{ if (s>0) printf "%.1f", (k/1024)/s/3600; else print "?" }')"
+  log "Write speed: ${SPEED_MBS} MB/s  ->  about ${ETA_H} h for the transfer"
+  SLOW="$(awk -v s="$SPEED_MBS" 'BEGIN{print (s<80)?1:0}')"
+  if [ "$SLOW" = "1" ]; then
+    warn "That is USB 2.0 territory (~60 MB/s). At this rate the copy"
+    warn "takes ${ETA_H} hours. Move the drive to a USB 3 port on the"
+    warn "server itself - not a monitor or dock hub - and use the cable"
+    warn "that shipped with the enclosure. Check with: lsusb -t"
+    if [ "${IGNORE_SLOW:-0}" != "1" ]; then
+      echo ""
+      read -r -p "  Continue anyway? [y/N]: " REPLY_SLOW </dev/tty
+      case "$REPLY_SLOW" in
+        y|Y|yes|YES) log "Continuing at operator request" ;;
+        *) echo ""; echo "Aborting. Nothing was written."; exit 1 ;;
+      esac
+    fi
+  else
+    ok "Write speed is reasonable"
+  fi
+else
+  warn "Could not measure write speed - continuing"
+fi
+
 if [ -d "$MODEL_PATH/.git" ]; then
   GIT_KB="$($SUDO du -sk "$MODEL_PATH/.git" 2>/dev/null | cut -f1)"
   log "Note: .git is $(( ${GIT_KB:-0} / 1024 / 1024 )) GiB and is NOT copied."
@@ -232,14 +370,23 @@ if command -v rsync >/dev/null 2>&1; then
        files already copied)"
   fi
 else
-  warn "rsync not installed - falling back to cp (no resume support)"
-  if $SUDO cp -r "$MODEL_PATH/." "$MODEL_DEST/"; then
-    $SUDO rm -rf "$MODEL_DEST/.git"
+  warn "rsync not installed - using tar (preserves modes, shows progress)"
+  N_SRC="$(find "$MODEL_PATH" -maxdepth 1 -type f | wc -l)"
+  log "Copying $N_SRC files - roughly 15 minutes for 75 GiB"
+  if ( cd "$MODEL_PATH" && $SUDO tar cf - --exclude=.git . ) \
+     | ( cd "$MODEL_DEST" && $SUDO tar xvf - ) \
+     | awk '{n++; printf "\r  %d files copied", n} END{print ""}'; then
     ok "Model copied"
   else
-    err "cp failed"
+    err "tar copy failed"
   fi
 fi
+
+# cp/tar under a hardened root umask (077) produces 0600 files that only
+# root can read. Normalise so checksums and the far-side import work.
+log "Normalising permissions on the package"
+$SUDO chmod -R a+rX "$MODEL_DEST" 2>/dev/null
+ok "Model files are world-readable"
 
 # =====================================================================
 step "5/8  Copying scripts and documentation"
@@ -293,11 +440,27 @@ ok "MANIFEST.txt"
 step "7/8  Generating checksums (reads everything back — slow but worth it)"
 log "This verifies the drive actually holds what we think it does."
 ( cd "$DEST" && find images model scripts -type f -print0 2>/dev/null \
-    | xargs -0 sha256sum > SHA256SUMS 2>/dev/null )
-if [ -s "$DEST/SHA256SUMS" ]; then
-  ok "$(wc -l < "$DEST/SHA256SUMS") files checksummed"
+    | $SUDO xargs -0 sha256sum > /tmp/sums.$$ 2>/tmp/sumerr.$$ )
+$SUDO cp /tmp/sums.$$ "$DEST/SHA256SUMS" 2>/dev/null \
+  || cp /tmp/sums.$$ "$DEST/SHA256SUMS" 2>/dev/null
+$SUDO chmod a+r "$DEST/SHA256SUMS" 2>/dev/null
+
+N_SUMS="$(wc -l < "$DEST/SHA256SUMS" 2>/dev/null || echo 0)"
+N_FILES="$(cd "$DEST" && find images model scripts -type f 2>/dev/null | wc -l)"
+if [ -s "/tmp/sumerr.$$" ]; then
+  warn "sha256sum reported errors:"
+  head -3 /tmp/sumerr.$$ | sed 's/^/       /'
+fi
+rm -f /tmp/sums.$$ /tmp/sumerr.$$
+
+if [ "$N_SUMS" -eq 0 ]; then
+  err "Checksum generation produced nothing"
+elif [ "$N_SUMS" -lt "$N_FILES" ]; then
+  err "SHA256SUMS covers only $N_SUMS of $N_FILES files."
+  err "Unreadable files were skipped - the manifest is incomplete."
+  err "Fix permissions and re-run step 7, or the far side verifies nothing."
 else
-  warn "Checksum generation produced nothing - verify manually on import"
+  ok "$N_SUMS of $N_FILES files checksummed"
 fi
 
 # =====================================================================
