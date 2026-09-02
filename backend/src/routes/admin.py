@@ -156,8 +156,15 @@ async def system_throughput(settings = Depends(get_settings), _: dict = Depends(
 
 @router.get("/system/gpus", response_model=list[GpuMetrics])
 async def system_gpus(_: dict = Depends(require_admin)):
-    """Fetch per-GPU metrics via Prometheus DCGM exporter (best effort).
-    Fallback to empty list if Prometheus not reachable in dev.
+    """Fetch per-GPU metrics (Prometheus/DCGM first, NVML fallback)."""
+    return await collect_gpu_metrics()
+
+
+async def collect_gpu_metrics() -> list[GpuMetrics]:
+    """Per-GPU metrics via Prometheus DCGM exporter, supplemented/replaced by NVML (best effort).
+
+    Returns an empty list when neither source is reachable.  Also used by the
+    dry-run validator (services.system_monitoring.get_gpu_metrics).
     """
     settings = get_settings()
     url = f"{settings.PROMETHEUS_URL}/api/v1/query"
@@ -334,38 +341,6 @@ def _get_gpu_architecture(major: int, minor: int) -> str:
     else:
         return f"SM {major}.{minor}"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-@router.post("/bootstrap-owner")
-async def bootstrap_owner(body: BootstrapRequest, settings = Depends(get_settings)):
-    SessionLocal = _get_session()
-    if SessionLocal is None:
-        raise HTTPException(status_code=503, detail="Database not ready")
-    async with SessionLocal() as session:
-        # If any admin exists, do nothing (two-role model).
-        # Use COUNT (or a LIMIT 1 query) to avoid MultipleResultsFound when multiple admins exist.
-        try:
-            cnt = (await session.execute(
-                select(func.count()).select_from(User).where(User.role == "Admin")
-            )).scalar_one()
-            if int(cnt or 0) > 0:
-                return {"status": "skipped"}
-        except Exception:
-            # Fallback: tolerate duplicates and just detect existence.
-            exists_any = (await session.execute(select(User).where(User.role == "Admin").limit(1))).first()
-            if exists_any:
-                return {"status": "skipped"}
-        org_id = None
-        if body.org_name:
-            org = Organization(name=body.org_name)
-            session.add(org)
-            await session.flush()
-            org_id = org.id
-        hashed = pwd_context.hash(body.password)
-        user = User(username=body.username, role="Admin", org_id=org_id, password_hash=hashed)
-        session.add(user)
-        await session.commit()
-        return {"status": "ok", "owner_id": user.id}
 
 
 @router.get("/upstreams")

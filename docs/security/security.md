@@ -1,251 +1,131 @@
-# Security Guide
+# Security
 
-This document describes Cortex's security posture and best practices for secure deployment.
-
----
+What Cortex actually does today, and what you must add around it. Read with the
+[threat model](threat-model.md) and the
+[production deployment guide](../operations/production-deployment.md).
 
 ## Authentication
 
-### API Key Authentication
-- All `/v1/*` endpoints require API key authentication
-- Keys are hashed (SHA-256) before storage
-- Keys use prefixes for easy identification (`ctx_`)
-- Scopes control access: `chat`, `completions`, `embeddings`
+### API keys (`/v1/*`)
 
-```bash
-# API call with authentication
-curl -H "Authorization: Bearer YOUR_API_KEY" \
-  http://localhost:8084/v1/chat/completions \
-  -d '{"model":"llama","messages":[...]}'
-```
+- Every `/v1` request needs `Authorization: Bearer <key>`. Keys are 40-character random
+  strings generated with `secrets.choice`; the first 8 characters are stored as a lookup
+  prefix and the full key is stored as a **bcrypt hash** (`passlib`, `backend/src/crypto.py`).
+  The plaintext is returned once at creation and cannot be recovered.
+- Keys carry scopes (`chat`, `completions`, `embeddings`), belong to an organization/user,
+  can expire and can be revoked instantly (**API Keys** page or `DELETE /admin/keys/{id}`).
+- `GATEWAY_DEV_ALLOW_ALL_KEYS` (default **false**) makes the gateway accept any bearer token.
+  The dev compose file sets it to `true` explicitly; the prod file pins it to `false` and
+  `make prod-check` fails if the environment overrides it.
 
-### Admin Authentication
-- Admin UI uses session cookies (`cortex_session`)
-- Development mode: Cookie-based with dev bypass
-- Production: Configure external auth or disable dev bypass
+### Admin sessions (`/admin/*`, `/auth/*`)
 
-```bash
-# Disable dev auth bypass in production
-GATEWAY_DEV_ALLOW_ALL_KEYS=false
-```
+- `POST /auth/login` sets the `cortex_session` cookie: an **HMAC-SHA256 signed token**
+  (username + expiry) using `SESSION_SECRET`. When `SESSION_SECRET` is empty the gateway
+  generates a random secret and stores it in the `config_kv` table, so sessions survive
+  restarts; set it explicitly in production so it is not tied to the database.
+- Cookie attributes: `HttpOnly`, `SameSite=Lax`, `Max-Age = SESSION_TTL_HOURS` (8),
+  `Secure = SESSION_COOKIE_SECURE` (default false; **set true behind TLS**).
+- Every `/admin/*` route requires an admin session (`require_admin`). The only
+  unauthenticated write is `POST /auth/bootstrap-owner`, which creates the first admin and is
+  a no-op once any admin exists. `ADMIN_BOOTSTRAP_*` env vars do the same at startup.
+- Passwords are bcrypt-hashed. There is no MFA, no password policy and no lockout; put the
+  UI behind your SSO/VPN if you need those.
 
----
+## Authorization
 
-## Authorization & Scopes
+| Endpoint | Requirement |
+|---|---|
+| `/v1/chat/completions` | key with `chat` |
+| `/v1/completions` | key with `completions` |
+| `/v1/embeddings` | key with `embeddings` |
+| `/v1/models` | any valid key |
+| `/admin/*` | admin session |
+| `/health`, `/metrics` | none (restrict `/metrics` at the proxy if the host is exposed) |
 
-### Path-to-Scope Mapping
-| Endpoint | Required Scope |
-|----------|----------------|
-| `/v1/chat/completions` | `chat` |
-| `/v1/completions` | `completions` |
-| `/v1/embeddings` | `embeddings` |
-| `/admin/*` | Admin session |
+## Model containers and the internal key
 
-### API Key Scopes
-```json
-{
-  "scopes": "chat,completions,embeddings"
-}
-```
+- The gateway starts model containers through the Docker socket. Each container gets
+  `--api-key $INTERNAL_VLLM_API_KEY` (vLLM and llama.cpp) and publishes its port on
+  **`127.0.0.1` only**, joined to the `cortex_default` network. LAN clients cannot bypass the
+  gateway; anything on the host loopback still needs the internal key.
+- Containers are labelled `cortex.managed=1`, `cortex.model_id`, `cortex.engine`; the gateway
+  re-adopts them after a restart and Prometheus discovers them by label.
+- Model containers run with the models directory mounted read-only, `--ipc host` (required by
+  NCCL/vLLM), the NVIDIA runtime, and no extra capabilities. They run whatever code the
+  checkpoint asks for when `trust_remote_code` is on: treat model files as code.
+- Custom startup args cannot set `--host`, `--port`, `--api-key`, `--model`,
+  `--served-model-name`, `--ssl-*`; custom env cannot set `NVIDIA_VISIBLE_DEVICES`,
+  `CUDA_VISIBLE_DEVICES`, `HF_HUB_OFFLINE`, `VLLM_API_KEY`, `LLAMA_API_KEY`, `LLAMA_ARG_*`.
+  The startup command is logged and returned by dry-run with the key redacted.
 
-Keys can be restricted to specific scopes for principle of least privilege.
+## The gateway process
 
----
+- Runs as the non-root `cortex` user (uid 1000) with the Docker socket's group added at start.
+  Access to the Docker socket is root-equivalent on the host: the gateway must be trusted, and
+  the socket should not be reachable by anything else.
+- Host network mode: the API listens on `0.0.0.0:8084`. Firewall it to the proxy / trusted LAN.
+- Postgres, Redis, Prometheus, exporters and pgadmin are bound to `127.0.0.1` (pgadmin only
+  with the dev `tools` profile).
+- Alembic migrations run at startup with the application's database credentials.
 
-## Transport Security
+## Transport security
 
-### TLS Configuration
-Cortex itself doesn't handle TLS. Deploy behind a reverse proxy:
+Cortex does not terminate TLS and **does not send HSTS**. Put a reverse proxy in front (Caddy
+example in the production guide), serve UI and API from one origin, set
+`SESSION_COOKIE_SECURE=true`, and let the proxy add `Strict-Transport-Security`.
 
-```nginx
-# nginx example
-server {
-    listen 443 ssl;
-    server_name cortex.example.com;
-    
-    ssl_certificate /etc/ssl/cert.pem;
-    ssl_certificate_key /etc/ssl/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:8084;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+Security headers the gateway does send when `SECURITY_HEADERS_ENABLED=true` (default):
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: strict-origin-when-cross-origin` (see `backend/src/main.py`).
 
-### CORS Configuration
-```yaml
-# Restrict to specific origins
-CORS_ALLOW_ORIGINS: https://admin.example.com,https://app.example.com
-```
+## CORS
 
-- Avoid using `*` with credentials
-- Auto-detection adds your host IP in development
-- Review with `docker exec cortex-gateway-1 printenv CORS_ALLOW_ORIGINS`
+`CORS_ALLOW_ORIGINS` is a comma-separated allowlist evaluated with credentials. The dev stack
+adds the detected host IP; production must list the exact UI origin. `*` is rejected by
+`make prod-check`. CORS protects browsers only; server-to-server callers are unaffected.
 
-### Security Headers
-Enabled by default:
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `Strict-Transport-Security` (when behind TLS proxy)
+## Limits and abuse controls
 
----
+| Setting | Default | Purpose |
+|---|---|---|
+| `REQUEST_MAX_BODY_BYTES` | 1 MiB (8 MiB in compose) | 413 on larger bodies |
+| `RATE_LIMIT_ENABLED` + `RATE_LIMIT_RPS/BURST` | off (on in prod compose) | Redis token bucket per key |
+| `RATE_LIMIT_WINDOW_SEC` / `RATE_LIMIT_MAX_REQUESTS` | 0 | optional sliding window |
+| `CONCURRENCY_LIMIT_ENABLED` + `MAX_CONCURRENT_STREAMS_PER_ID` | off (on in prod) | cap simultaneous streams per key |
+| `CB_ENABLED` | off | circuit breaker per upstream |
+| per-model `request_timeout_sec` / `stream_timeout_sec` | engine defaults | bound request duration |
 
-## Rate Limiting
+## Data at rest
 
-Protect against abuse with Redis-backed rate limiting:
+- Database: users (bcrypt password hashes), organizations, API key hashes + prefixes, model
+  configurations, usage rows (metadata: key id, model, tokens, latency, status - **no prompt
+  or completion text**), `config_kv` (session secret, registry).
+- `hf_token` on a model is stored in plaintext in the database (it must be replayed to
+  HuggingFace) and is never returned by the API; exports redact it.
+- Redis holds rate-limit counters only.
+- Model weights and the HF cache are plain files under `/var/cortex`; protect them with
+  filesystem permissions and backups.
+- Deployment exports (`/var/cortex/exports`) contain the database dump, so treat them as
+  secrets.
 
-```yaml
-RATE_LIMIT_ENABLED: "true"
-RATE_LIMIT_RPS: 10          # Requests per second
-RATE_LIMIT_BURST: 20        # Burst allowance
-RATE_LIMIT_WINDOW_SEC: 60   # Sliding window
-```
+## Logging and audit
 
-### Concurrency Limits
-Protect model containers from overload:
+- Gateway request log: request id, route, status, latency, key prefix; auth decisions are
+  counted in `gateway_key_auth_allowed_total` / `gateway_key_auth_blocked_total`.
+- Container start commands are logged with secrets redacted.
+- There is no tamper-evident audit trail; ship Docker logs to your SIEM if you need one.
 
-```yaml
-CONCURRENCY_LIMIT_ENABLED: "true"
-MAX_CONCURRENT_STREAMS_PER_ID: 5
-```
+## Incident response
 
----
+1. Revoke the affected API keys (**API Keys**), rotate `INTERNAL_VLLM_API_KEY` (then Apply on
+   every running model) and `SESSION_SECRET` (logs everyone out).
+2. Reset admin passwords; review **Usage** for the key and time window.
+3. Check `docker ps -a --filter label=cortex.managed=1` for containers you did not start and
+   `docker logs cortex-gateway-1` for unexpected `/admin` activity.
 
-## Upstream Security
+## Production checklist
 
-### Internal API Key
-Secure communication between gateway and model containers:
-
-```yaml
-INTERNAL_VLLM_API_KEY: "strong-random-key-here"
-```
-
-Generate a strong key:
-```bash
-openssl rand -hex 32
-```
-
----
-
-## Data Security
-
-### Sensitive Data Handling
-- API keys are hashed before storage
-- HuggingFace tokens are redacted in exports
-- Usage logs contain metadata, not request payloads
-- Database backups may contain sensitive configuration
-
-### Export Security
-When using deployment export:
-- HF tokens are redacted (replaced with `[REDACTED]`)
-- Export manifests flag when tokens were present
-- Reconfigure tokens after import
-
----
-
-## Production Hardening
-
-### Required Settings
-```yaml
-# docker.compose.prod.yaml
-environment:
-  GATEWAY_DEV_ALLOW_ALL_KEYS: "false"
-  INTERNAL_VLLM_API_KEY: "your-strong-key"
-  CORS_ALLOW_ORIGINS: "https://your-domain.com"
-```
-
-### Checklist
-- [ ] Disable dev auth bypass
-- [ ] Set strong internal API key
-- [ ] Configure specific CORS origins
-- [ ] Change default admin password
-- [ ] Enable TLS via reverse proxy
-- [ ] Enable rate limiting
-- [ ] Configure firewall rules
-- [ ] Enable audit logging
-- [ ] Set up backup automation
-
-### Verification
-```bash
-make prod-check
-```
-
----
-
-## Network Security
-
-### Firewall Rules
-Only expose necessary ports:
-
-```bash
-# Allow admin UI and API
-sudo ufw allow 3001/tcp  # Frontend
-sudo ufw allow 8084/tcp  # Gateway
-
-# Block direct access to internal services
-sudo ufw deny 5432/tcp   # PostgreSQL
-sudo ufw deny 6379/tcp   # Redis
-sudo ufw deny 9090/tcp   # Prometheus (or restrict to monitoring)
-```
-
-### Docker Network
-Model containers communicate via `cortex_default` network:
-- Isolated from host network
-- Gateway manages model container lifecycle
-- Internal ports not exposed to host
-
----
-
-## Audit & Monitoring
-
-### Usage Logging
-All API requests are logged with:
-- Request ID
-- API key (hashed reference)
-- Model name
-- Token counts
-- Latency
-- Status code
-
-### Prometheus Metrics
-Security-relevant metrics:
-- `gateway_key_auth_allowed_total` — Successful authentications
-- `gateway_key_auth_blocked_total` — Blocked requests
-- `gateway_requests_total` — Request counts by status
-
-### Log Review
-```bash
-# Check for auth failures
-make logs-gateway | grep -i "auth"
-
-# Check for errors
-make logs-gateway | grep -i "error"
-```
-
----
-
-## Incident Response
-
-### Suspected Compromise
-1. Revoke affected API keys immediately
-2. Review usage logs for anomalies
-3. Change admin passwords
-4. Rotate `INTERNAL_VLLM_API_KEY`
-5. Review and restrict CORS origins
-
-### Key Revocation
-```bash
-# Via Admin UI: API Keys → Delete
-# Via API:
-curl -X DELETE http://localhost:8084/admin/keys/{key_id} -b cookies.txt
-```
-
----
-
-## See Also
-
-- [Threat Model](threat-model.md) — Detailed threat analysis
-- [Configuration](../getting-started/configuration.md) — Environment variables
-- [Admin Setup](../getting-started/admin-setup.md) — Production setup guide
+The authoritative list lives in
+[Production deployment → Security checklist](../operations/production-deployment.md#5-security-checklist);
+`make prod-check` enforces the machine-checkable items.

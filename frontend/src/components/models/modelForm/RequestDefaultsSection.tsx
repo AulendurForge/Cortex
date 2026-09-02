@@ -2,11 +2,12 @@
 
 import React from 'react';
 import { Tooltip } from '../../Tooltip';
-import { ModelFormValues } from '../ModelForm';
+import { FormFieldName, ModelFormValues, SUGGESTED_SAMPLING } from '../modelFormValues';
+import { NumberField } from '../../NumberField';
 
 interface RequestDefaultsSectionProps {
   values: ModelFormValues;
-  onChange: (field: keyof ModelFormValues, value: any) => void;
+  onChange: (field: FormFieldName, value: unknown) => void;
 }
 
 /**
@@ -19,6 +20,14 @@ interface RequestDefaultsSectionProps {
  */
 export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSectionProps) {
   if (!values.engine_type) return null;
+  const customJsonError = (() => {
+    const t = values.custom_request_json;
+    if (!t || !t.trim()) return null;
+    try {
+      const v: unknown = JSON.parse(t);
+      return v && typeof v === 'object' && !Array.isArray(v) ? null : 'Must be a JSON object';
+    } catch (e) { return `Invalid JSON: ${(e as Error).message}`; }
+  })();
 
   return (
     <div className="md:col-span-2 space-y-4">
@@ -38,14 +47,14 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <label className="text-sm">
           Temperature
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={0.0} 
-            max={2.0} 
-            step={0.1} 
-            value={values.temperature ?? 0.8} 
-            onChange={(e) => onChange('temperature', Number(e.target.value) || 0.8)} 
+          <NumberField
+            className="mt-1"
+            min={0.0}
+            max={2.0}
+            step={0.1}
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.temperature})`}
+            value={values.temperature}
+            onChange={(v) => onChange('temperature', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Sampling temperature. 0.0 = deterministic, 1.0 = balanced, 2.0 = very random. 
@@ -55,14 +64,14 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 
         <label className="text-sm">
           Top-P
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={0.0} 
-            max={1.0} 
-            step={0.05} 
-            value={values.top_p ?? 0.9} 
-            onChange={(e) => onChange('top_p', Number(e.target.value) || 0.9)} 
+          <NumberField
+            className="mt-1"
+            min={0.0}
+            max={1.0}
+            step={0.05}
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.top_p})`}
+            value={values.top_p}
+            onChange={(v) => onChange('top_p', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Nucleus sampling threshold. 0.1 = conservative, 0.9 = balanced, 1.0 = all tokens. 
@@ -72,14 +81,15 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 
         <label className="text-sm">
           Top-K
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={1} 
-            max={100} 
-            step={1} 
-            value={values.top_k ?? 40} 
-            onChange={(e) => onChange('top_k', Number(e.target.value) || 40)} 
+          <NumberField
+            className="mt-1"
+            min={1}
+            max={100}
+            step={1}
+            integer
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.top_k})`}
+            value={values.top_k}
+            onChange={(v) => onChange('top_k', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Limit sampling to top K tokens. 1 = greedy, 40 = balanced, 100 = diverse. 
@@ -89,14 +99,14 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 
         <label className="text-sm">
           Repetition Penalty
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={1.0} 
-            max={2.0} 
-            step={0.1} 
-            value={values.repetition_penalty ?? 1.2} 
-            onChange={(e) => onChange('repetition_penalty', Number(e.target.value) || 1.2)} 
+          <NumberField
+            className="mt-1"
+            min={1.0}
+            max={2.0}
+            step={0.1}
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.repetition_penalty})`}
+            value={values.repetition_penalty}
+            onChange={(v) => onChange('repetition_penalty', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Penalty for repeated tokens. 1.0 = no penalty, 1.2 = moderate penalty. 
@@ -106,14 +116,14 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 
         <label className="text-sm">
           Frequency Penalty
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={-2.0} 
-            max={2.0} 
-            step={0.1} 
-            value={values.frequency_penalty ?? 0.5} 
-            onChange={(e) => onChange('frequency_penalty', Number(e.target.value) || 0.5)} 
+          <NumberField
+            className="mt-1"
+            min={-2.0}
+            max={2.0}
+            step={0.1}
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.frequency_penalty})`}
+            value={values.frequency_penalty}
+            onChange={(v) => onChange('frequency_penalty', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Penalty based on token frequency. 0.0 = no penalty, 0.5 = moderate penalty. 
@@ -123,14 +133,14 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 
         <label className="text-sm">
           Presence Penalty
-          <input 
-            className="input mt-1" 
-            type="number" 
-            min={-2.0} 
-            max={2.0} 
-            step={0.1} 
-            value={values.presence_penalty ?? 0.5} 
-            onChange={(e) => onChange('presence_penalty', Number(e.target.value) || 0.5)} 
+          <NumberField
+            className="mt-1"
+            min={-2.0}
+            max={2.0}
+            step={0.1}
+            placeholder={`engine default (suggested ${SUGGESTED_SAMPLING.presence_penalty})`}
+            value={values.presence_penalty}
+            onChange={(v) => onChange('presence_penalty', v)}
           />
           <p className="text-[11px] text-white/50 mt-1">
             Penalty for tokens already present in context. 0.0 = no penalty, 0.5 = moderate penalty. 
@@ -143,6 +153,7 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
         <div className="font-medium text-white/80 mb-1">⚡ How this works:</div>
         <ul className="text-white/70 space-y-1 list-disc pl-4">
           <li>These are <strong>defaults</strong> - clients can override them in API requests</li>
+          <li>Leave a field empty to send nothing and let the engine use its own default</li>
           <li>Gateway merges these into requests that don't specify values</li>
           <li>Gateway automatically translates parameter names for llama.cpp (e.g., "temperature" → "temp")</li>
           <li>Changes take effect immediately - no container restart needed!</li>
@@ -173,7 +184,9 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
 }`}
             value={values.custom_request_json || ''}
             onChange={(e) => onChange('custom_request_json', e.target.value)}
+            aria-invalid={customJsonError !== null}
           />
+          {customJsonError && <div className="text-[11px] text-red-300 mt-1" role="alert">{customJsonError}</div>}
           <p className="text-[11px] text-white/50 mt-1">
             Enter valid JSON. Gateway will merge these fields into all requests.
             <Tooltip text="Use this for vllm_xargs (model-specific SamplingParams), custom chat templates, or any model-specific request parameters. Must be valid JSON." />

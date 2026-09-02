@@ -52,3 +52,15 @@ UPSTREAM_HEALTH_DEGRADATION = Counter(
 )
 
 
+
+# Model lifecycle (ModelSupervisor)
+MODEL_START_TOTAL = Counter(
+    "cortex_model_start_total", "Model start attempts by engine and outcome", ["engine", "result"]
+)
+MODEL_START_SECONDS = Histogram(
+    "cortex_model_start_seconds", "Seconds from container start to ready", ["engine"],
+    buckets=(5, 10, 20, 30, 60, 120, 300, 600, 1200),
+)
+MODEL_STATE_TRANSITIONS = Counter(
+    "cortex_model_state_transitions_total", "Model state transitions", ["engine", "state"]
+)

@@ -112,8 +112,8 @@ export default function AddingModels() {
             <div className="space-y-2">
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Setup steps</div>
               <ol className="text-[11px] text-white/70 space-y-1.5">
-                <StepItem num={1}>Set your <strong>Base Directory</strong> (e.g., /models)</StepItem>
-                <StepItem num={2}>Place model folders inside this directory</StepItem>
+                <StepItem num={1}>The models directory is fixed by <code>CORTEX_MODELS_DIR</code> and shown read-only</StepItem>
+                <StepItem num={2}>Place model folders inside this directory on the host</StepItem>
                 <StepItem num={3}>Click <strong>Refresh</strong> to scan available folders</StepItem>
                 <StepItem num={4}>Select a folder—Cortex inspects its contents</StepItem>
               </ol>
@@ -195,8 +195,9 @@ export default function AddingModels() {
                 <li><strong>Served Model Name:</strong> API identifier (e.g., "llama-3.1-8b")</li>
                 <li><strong>Task:</strong> generate (chat) or embed (embeddings)</li>
                 <li><strong>GPUs:</strong> Select which GPUs to use</li>
-                <li><strong>Max Context:</strong> Token limit (8192-131072)</li>
+                <li><strong>Max Context:</strong> Token limit; empty = the model&apos;s own maximum</li>
                 <li><strong>Memory Utilization:</strong> How much VRAM to use (0.8-0.95)</li>
+                <li><strong>Everything else:</strong> Empty fields are not sent, so the engine default applies</li>
               </ul>
             </WalkthroughStep>
 
@@ -228,8 +229,10 @@ export default function AddingModels() {
               color="cyan"
             >
               <p className="text-[11px] text-white/70 leading-relaxed mb-2">
-                Review your configuration summary. Click <strong className="text-cyan-300">Launch Model</strong> to create 
-                the configuration. Then from the Models table, click <strong className="text-emerald-300">Start</strong> to deploy.
+                Review the summary (source, engine image, GPUs, TP/PP, custom args). A <strong className="text-cyan-300">dry run</strong> runs
+                automatically: it shows the exact command, whether the image is cached and any warnings. Errors block
+                <strong className="text-cyan-300"> Launch Model</strong> until fixed or explicitly overridden. Launch creates the configuration;
+                then click <strong className="text-emerald-300">Start</strong> in the Models table to deploy.
               </p>
             </WalkthroughStep>
           </div>
@@ -241,7 +244,8 @@ export default function AddingModels() {
         <SectionTitle variant="emerald" className="text-[10px]">Walkthrough: Offline Mode with llama.cpp (GGUF)</SectionTitle>
         <Card className="p-4 bg-white/[0.02] border-white/5 space-y-4">
           <p className="text-[12px] text-white/70 leading-relaxed">
-            Running a GGUF model with llama.cpp—required for GPT-OSS and multi-part GGUF files.
+            Running a GGUF model with llama.cpp. GGUF files are always served by llama.cpp: picking a GGUF-only folder selects
+            llama.cpp automatically and disables vLLM.
           </p>
 
           <div className="space-y-4">
@@ -267,13 +271,14 @@ export default function AddingModels() {
             >
               <div className="space-y-3">
                 <p className="text-[11px] text-white/70 leading-relaxed">
-                  Set your base directory and select a folder containing GGUF files:
+                  The models directory is fixed by <code className="text-purple-300 bg-black/30 px-1 rounded">CORTEX_MODELS_DIR</code> and shown read-only.
+                  Drop your model folder there, then:
                 </p>
                 <ol className="text-[11px] text-white/70 space-y-1.5 ml-4">
-                  <li>1. Enter base path: <code className="text-purple-300 bg-black/30 px-1 rounded">/models</code></li>
-                  <li>2. Click <strong>Save & Scan</strong></li>
-                  <li>3. Select your model folder from the dropdown</li>
-                  <li>4. Cortex inspects the folder and shows available GGUF files</li>
+                  <li>1. Click <strong>Refresh</strong> to list the folders</li>
+                  <li>2. Select your model folder from the dropdown</li>
+                  <li>3. Cortex inspects the folder and shows the available GGUF quantizations</li>
+                  <li>4. Pick a quantization; the file path is filled in for you</li>
                 </ol>
 
                 <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg space-y-2">
@@ -284,11 +289,11 @@ export default function AddingModels() {
                   </p>
                 </div>
 
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2">
-                  <div className="text-[10px] font-bold text-amber-300">Tokenizer Requirement</div>
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg space-y-2">
+                  <div className="text-[10px] font-bold text-emerald-300">No tokenizer needed</div>
                   <p className="text-[10px] text-white/60">
-                    GGUF files need a tokenizer. Either provide an HF repo ID (e.g., "meta-llama/Llama-3.1-8B") 
-                    or ensure tokenizer.json exists in the folder.
+                    llama.cpp reads the tokenizer and chat template from the GGUF itself. The optional tokenizer / HF config
+                    overrides only exist for vLLM SafeTensors folders.
                   </p>
                 </div>
               </div>
@@ -303,15 +308,17 @@ export default function AddingModels() {
                 Configure llama.cpp-specific parameters:
               </p>
               <ul className="text-[11px] text-white/70 space-y-1.5 ml-4">
-                <li><strong>Context Size:</strong> Total context window (e.g., 16384)</li>
-                <li><strong>Parallel Slots:</strong> Concurrent request capacity (e.g., 16)</li>
-                <li><strong>GPU Layers (ngl):</strong> Layers to offload to GPU (999 = all)</li>
-                <li><strong>GPU Selection:</strong> Which GPUs to use (creates tensor_split)</li>
-                <li><strong>KV Cache Type:</strong> q8_0 recommended for balance</li>
+                <li><strong>Context Size (-c):</strong> Total context window; empty = engine default</li>
+                <li><strong>Parallel Slots (-np):</strong> Concurrent request capacity; empty = auto</li>
+                <li><strong>GPU Layers (-ngl):</strong> Empty = auto, 0 = CPU only, 999 = all</li>
+                <li><strong>GPU Selection:</strong> Which GPUs to use (generates tensor_split)</li>
+                <li><strong>Flash Attention:</strong> auto / on / off (quantized V cache needs it on)</li>
+                <li><strong>Load Mode:</strong> auto / mmap / mlock / dio</li>
+                <li><strong>KV Cache Type K/V:</strong> f16 default; q8_0 halves KV memory</li>
               </ul>
               <div className="mt-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-[10px] text-white/60">
-                <strong className="text-blue-300">Context per slot:</strong> Total context ÷ parallel slots. 
-                For 16384 context with 16 slots = 1024 tokens per slot.
+                <strong className="text-blue-300">Context per slot:</strong> Total context ÷ parallel slots
+                (unless the KV cache is unified). For 16384 context with 16 slots = 1024 tokens per slot.
               </div>
             </WalkthroughStep>
 
@@ -321,8 +328,9 @@ export default function AddingModels() {
               color="purple"
             >
               <p className="text-[11px] text-white/70 leading-relaxed mb-2">
-                <em>Optional but powerful:</em> Use a small draft model to accelerate inference.
-                Point to a smaller GGUF file (e.g., 0.5B draft model) to speed up your main model.
+                <em>Optional but powerful:</em> In Core Settings, expand <strong>Speculative decoding</strong> and set the draft
+                model (path relative to the models dir), the speculative type and the draft token limits (--spec-draft-n-max/-n-min,
+                --spec-draft-p-min, --spec-draft-ngl).
               </p>
             </WalkthroughStep>
           </div>
@@ -376,11 +384,11 @@ export default function AddingModels() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-red-400">✗</span>
-                <span>Missing tokenizer for GGUF deployments</span>
+                <span>Trying to serve a GGUF file with vLLM (the gateway rejects it: GGUF is llama.cpp only)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-red-400">✗</span>
-                <span>Wrong base directory path (container sees /models, not host path)</span>
+                <span>Launching with dry-run errors ticked away instead of fixed (TP × PP ≠ GPUs, image not cached)</span>
               </li>
             </ul>
           </Card>

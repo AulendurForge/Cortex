@@ -13,7 +13,7 @@ cd Cortex
 make quick-start
 
 # 3. Access at the IP shown in output
-# Example: http://192.168.1.181:3001/login
+# Example: http://192.168.1.50:3001/login
 # Username: admin
 # Password: admin
 ```
@@ -36,9 +36,9 @@ make quick-start
 
 ```bash
 # When you run: make up
-# System detects: 192.168.1.181 (example)
+# System detects: 192.168.1.50 (example)
 # Automatically sets:
-# - CORS_ALLOW_ORIGINS=http://192.168.1.181:3001,http://localhost:3001,http://127.0.0.1:3001
+# - CORS_ALLOW_ORIGINS=http://192.168.1.50:3001,http://localhost:3001,http://127.0.0.1:3001
 # - All URLs in output use your real IP
 # - Frontend connects to correct gateway IP
 ```
@@ -53,7 +53,7 @@ make info    # Shows full configuration
 
 **How it works:**
 1. Makefile runs `scripts/detect-ip.sh`
-2. Detected IP is passed to Docker Compose: `HOST_IP=192.168.1.181`
+2. Detected IP is passed to Docker Compose: `HOST_IP=192.168.1.50`
 3. Docker Compose injects into gateway environment: `CORS_ALLOW_ORIGINS=http://${HOST_IP}:3001,...`
 4. Gateway allows requests from your network!
 
@@ -182,14 +182,14 @@ pip install huggingface_hub
 # Test IP detection
 bash scripts/detect-ip.sh
 
-# Should show your LAN IP, e.g., 192.168.1.181
+# Should show your LAN IP, e.g., 192.168.1.50
 # NOT localhost
 # NOT a Docker bridge IP (172.17-31.x.x)
 ```
 
 **If it shows "localhost":**
 - Your network interface might not be configured
-- Set manually: `export HOST_IP=192.168.1.181`
+- Set manually: `export HOST_IP=192.168.1.50`
 - See troubleshooting below
 
 ### Step 4: Start Cortex
@@ -199,12 +199,12 @@ make quick-start
 ```
 
 **What happens:**
-1. Detects IP: `192.168.1.181`
-2. Passes to Docker Compose: `HOST_IP=192.168.1.181`
+1. Detects IP: `192.168.1.50`
+2. Passes to Docker Compose: `HOST_IP=192.168.1.50`
 3. Builds containers
 4. Starts all services
 5. Configures CORS automatically
-6. Creates admin user
+6. Asks for the admin username/password once (blank in .env) and creates the account
 7. Shows you the URLs
 
 ### Step 5: Access Admin UI
@@ -212,7 +212,7 @@ make quick-start
 ```bash
 # The output will show something like:
 # ✓ Cortex is ready!
-# Login at: http://192.168.1.181:3001/login (admin/admin)
+# Login at: http://192.168.1.50:3001/login with the admin credentials from .env
 
 # Open that URL in your browser
 # Use the IP shown, NOT localhost
@@ -222,7 +222,7 @@ make quick-start
 
 ```bash
 # Option 1: Via Makefile
-make login      # Enter admin/admin
+make login      # Enter the admin credentials (make setup-admin to change them)
 make create-key # Copy the token
 
 # Option 2: Via Admin UI
@@ -265,7 +265,7 @@ make status
 make ip
 
 # Should show your LAN IP, not localhost
-# Example: 192.168.1.181
+# Example: 192.168.1.50
 ```
 
 ### Check 3: CORS is Configured
@@ -275,7 +275,7 @@ make ip
 docker exec cortex-gateway-1 printenv CORS_ALLOW_ORIGINS
 
 # Should show:
-# http://192.168.1.181:3001,http://localhost:3001,http://127.0.0.1:3001
+# http://192.168.1.50:3001,http://localhost:3001,http://127.0.0.1:3001
 # (with YOUR actual IP, not localhost at the start)
 ```
 
@@ -294,12 +294,12 @@ make health
 
 ```bash
 # From host machine
-curl http://192.168.1.181:8084/health
+curl http://192.168.1.50:8084/health
 
 # Should return: {"status":"ok"}
 
 # From another device on your network (same command)
-curl http://192.168.1.181:8084/health
+curl http://192.168.1.50:8084/health
 
 # Should also work!
 ```
@@ -362,20 +362,14 @@ make restart
 
 ### Production Deployment
 
+Production uses `docker.compose.prod.yaml`, real secrets in `.env`, built images and a TLS
+reverse proxy. Follow [Production deployment](../operations/production-deployment.md):
+
 ```bash
-# 1. Edit docker.compose.prod.yaml
-# - Set GATEWAY_DEV_ALLOW_ALL_KEYS=false
-# - Set strong INTERNAL_VLLM_API_KEY
-# - Configure TLS reverse proxy
-
-# 2. Pre-flight check
-make prod-check
-
-# 3. Start in production mode
+cp .env.example .env     # INTERNAL_VLLM_API_KEY, SESSION_SECRET, ADMIN_BOOTSTRAP_PASSWORD, CORS_ALLOW_ORIGINS
+make build ENV=prod
+make prod-check          # exits non-zero on default secrets, :latest tags, missing dirs
 make up ENV=prod
-
-# 4. Change default admin password immediately!
-# Login → Users → Edit admin user → Change password
 ```
 
 ---
@@ -424,7 +418,7 @@ ip addr show | grep 'inet '
 # Identify the correct one (usually 192.168.x.x or 10.x.x.x)
 
 # Override detection
-export HOST_IP=192.168.1.181
+export HOST_IP=192.168.1.50
 make restart
 make ip  # Verify
 ```
@@ -452,7 +446,7 @@ make logs-gateway
 
 **Test gateway directly:**
 ```bash
-curl http://192.168.1.181:8084/health
+curl http://192.168.1.50:8084/health
 ```
 
 **Check CORS:**
@@ -466,49 +460,11 @@ docker exec cortex-gateway-1 printenv CORS_ALLOW_ORIGINS
 
 ## 🔒 Security Checklist (Production)
 
-### Before Going to Production
-
-```bash
-# Run pre-flight check
-make prod-check
-```
-
-**Must configure:**
-
-1. **Disable Dev Mode**
-   ```yaml
-   # docker.compose.prod.yaml
-   GATEWAY_DEV_ALLOW_ALL_KEYS: "false"
-   ```
-
-2. **Set Strong API Key**
-   ```yaml
-   INTERNAL_VLLM_API_KEY: "your-strong-random-key-here"
-   ```
-
-3. **Restrict CORS** (if needed)
-   ```yaml
-   # If you want to restrict to specific IPs only:
-   CORS_ALLOW_ORIGINS: http://192.168.1.181:3001
-   ```
-
-4. **Change Default Admin Password**
-   - Login → Users → Edit admin → Set new password
-
-5. **Enable TLS**
-   - Set up nginx or traefik reverse proxy
-   - Get SSL certificate (Let's Encrypt)
-
-6. **Set Up Backups**
-   ```bash
-   # Add to crontab
-   crontab -e
-   # Add: 0 2 * * * cd /path/to/Cortex && make db-backup
-   ```
-
-7. **Configure Firewall**
-   - Only allow ports 3001 and 8084 from trusted networks
-   - Block all other incoming traffic
+The checklist is maintained in one place:
+[Production deployment → Security checklist](../operations/production-deployment.md#5-security-checklist)
+(`make prod-check` enforces the machine-checkable items). Summary: real secrets, TLS proxy with
+a single origin, `SESSION_COOKIE_SECURE=true`, exact `CORS_ALLOW_ORIGINS`, firewall to the
+proxy, backups scheduled, admin password changed.
 
 ---
 
@@ -567,7 +523,7 @@ graph LR
     B --> C[Scan all interfaces]
     C --> D[Filter out Docker/loopback]
     D --> E[Score remaining IPs]
-    E --> F[Select best: 192.168.1.181]
+    E --> F[Select best: 192.168.1.50]
     F --> G[Export HOST_IP]
     G --> H[Docker Compose]
     H --> I[Gateway CORS Config]
@@ -592,9 +548,9 @@ The system prefers IPs in this order:
 The Next.js frontend automatically detects which IP the user accessed it from:
 
 ```javascript
-// User accesses: http://192.168.1.181:3001
-// Frontend detects: window.location.hostname = "192.168.1.181"
-// Calls gateway at: http://192.168.1.181:8084
+// User accesses: http://192.168.1.50:3001
+// Frontend detects: window.location.hostname = "192.168.1.50"
+// Calls gateway at: http://192.168.1.50:8084
 ```
 
 **Result**: Works seamlessly from any device!
@@ -610,7 +566,7 @@ The Next.js frontend automatically detects which IP the user accessed it from:
 # Login → Users → Create User
 
 # Option 2: Via API
-curl -X POST http://192.168.1.181:8084/admin/users \
+curl -X POST http://192.168.1.50:8084/admin/users \
   -b cookies.txt \
   -H 'Content-Type: application/json' \
   -d '{"username":"john","password":"secret","role":"User"}'
@@ -670,16 +626,16 @@ make restart
 ### Scenario 1: Access from Host Machine
 
 ```
-Browser on host: http://192.168.1.181:3001 ✅
+Browser on host: http://192.168.1.50:3001 ✅
 Browser on host: http://localhost:3001 ✅ (also works)
 ```
 
 ### Scenario 2: Access from Other Devices
 
 ```
-Laptop on network: http://192.168.1.181:3001 ✅
-Tablet on network: http://192.168.1.181:3001 ✅
-Phone on network:  http://192.168.1.181:3001 ✅
+Laptop on network: http://192.168.1.50:3001 ✅
+Tablet on network: http://192.168.1.50:3001 ✅
+Phone on network:  http://192.168.1.50:3001 ✅
 
 Using localhost:  ❌ Won't work (localhost is device-local)
 ```
@@ -692,7 +648,7 @@ import requests
 
 # Use the host IP
 response = requests.post(
-    "http://192.168.1.181:8084/v1/chat/completions",
+    "http://192.168.1.50:8084/v1/chat/completions",
     headers={"Authorization": "Bearer YOUR_TOKEN"},
     json={
         "model": "your-model",
@@ -785,7 +741,7 @@ make logs-gateway | tail -100
 docker exec cortex-gateway-1 printenv CORS_ALLOW_ORIGINS
 
 # Test connectivity
-curl -v http://192.168.1.181:8084/health
+curl -v http://192.168.1.50:8084/health
 ```
 
 ### Contact Support
@@ -848,9 +804,9 @@ make quick-start
 4. **Set up TLS** for production (nginx/traefik)
 5. **Regular backups** (automated via cron)
 6. **Monitor logs** for suspicious activity
-7. **Review** `make prod-check` output before production deployment
+7. **Run** `make prod-check` before every production deployment
 
 ---
 
-**Questions?** Run `make help` or check `MAKEFILE_GUIDE.md`
+**Questions?** Run `make help` or read the [Makefile guide](../operations/makefile-guide.md).
 

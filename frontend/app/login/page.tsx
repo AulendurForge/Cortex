@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Image from 'next/image';
 import { useToast } from '../../src/providers/ToastProvider';
-import apiFetch from '../../src/lib/api-clients';
+import apiFetch, { getGatewayBaseUrl } from '../../src/lib/api-clients';
 import { useRouter } from 'next/navigation';
 import { useUser } from '../../src/providers/UserProvider';
 import { Card, Button, Input, Label, SectionTitle } from '../../src/components/UI';
@@ -14,11 +14,14 @@ export default function LoginPage() {
   const router = useRouter();
   const { setUser } = useUser();
   const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (submitting) return;
     const form = new FormData(e.currentTarget);
     const body = { username: String(form.get('username') || ''), password: String(form.get('password') || '') };
+    setSubmitting(true);
     try {
       const res: any = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify(body) });
       const username = res?.user?.username || body.username;
@@ -33,7 +36,22 @@ export default function LoginPage() {
       addToast({ title: 'Welcome back!', kind: 'success' });
       router.push('/guide?tab=getting-started');
     } catch (e: any) {
-      addToast({ title: 'Authentication failed', kind: 'error' });
+      // apiFetch throws {code, message} for HTTP errors and a TypeError when the
+      // gateway cannot be reached at all (firewall, wrong host, CORS rejection).
+      const code = typeof e?.code === 'number' ? e.code : undefined;
+      if (code === 401) {
+        addToast({ title: 'Authentication failed', description: 'Invalid username or password', kind: 'error' });
+      } else if (code) {
+        addToast({ title: 'Authentication failed', description: `Gateway returned ${code}: ${e?.message || 'error'}`, kind: 'error' });
+      } else {
+        addToast({
+          title: 'Cannot reach the Cortex gateway',
+          description: `No response from ${getGatewayBaseUrl()}. Check that port 8084 is reachable from this machine (firewall) and that the gateway is running.`,
+          kind: 'error',
+        });
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -105,8 +123,9 @@ export default function LoginPage() {
               variant="cyan" 
               className="w-full h-11 text-sm font-bold uppercase tracking-widest mt-4 shadow-lg shadow-cyan-500/10" 
               type="submit"
+              disabled={submitting}
             >
-              Initialize Session
+              {submitting ? 'Signing in…' : 'Initialize Session'}
             </Button>
           </form>
         </div>

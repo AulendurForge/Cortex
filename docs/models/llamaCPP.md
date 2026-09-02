@@ -1,1535 +1,266 @@
 # llama.cpp Engine Guide
 
-## Overview
+llama.cpp (`llama-server`) serves **GGUF** models on CPU, GPU or a mix of both. Cortex uses it
+for every GGUF file: single-file, sharded (`-00001-of-0000N`), quantized (Q4_K_M, Q8_0, ...),
+and for architectures vLLM does not support (for example GPT-OSS / Harmony).
 
-llama.cpp is Cortex's secondary inference engine, specifically added to support models that vLLM cannot handle. It provides CPU+GPU hybrid inference with GGUF quantized models.
-
-**When to use llama.cpp:**
-- ✅ **GPT-OSS 20B/120B models** (Harmony architecture) ← **Primary reason added to Cortex**
-- ✅ GGUF quantized models (Q4_K_M, Q8_0, etc.)
-- ✅ Custom/experimental architectures unsupported by vLLM
-- ✅ CPU+GPU hybrid inference (offload layers to GPU)
-- ✅ Tight VRAM constraints requiring aggressive quantization
-
-**When to use vLLM instead:**
-- ✅ Model has HuggingFace Transformers checkpoint
-- ✅ Standard architecture (Llama, Mistral, Qwen, etc.)
-- ✅ Need maximum throughput
-- ✅ Pure GPU inference with sufficient VRAM
+Pinned image: **`ghcr.io/ggml-org/llama.cpp:server-cuda-b10731`** (`LLAMACPP_IMAGE` in
+`versions.env` and `backend/src/config.py`), CUDA 12.8 runtime, works with NVIDIA driver
+>= 550. `server-cuda` without a build number is rebuilt daily and must not be used in
+production or offline packages. CPU-only hosts can set `LLAMACPP_IMAGE=ghcr.io/ggml-org/llama.cpp:server-b10731`.
 
 ---
 
-## System Requirements
+## How Cortex runs llama.cpp
 
-### GPU Requirements (Optional)
-
-llama.cpp can run on CPU-only, but GPU acceleration requires:
-
-- **CUDA Support**: llama.cpp server-cuda Docker image includes CUDA libraries
-- **NVIDIA GPU**: Any NVIDIA GPU with CUDA support
-- **GPU Layers**: Configure `ngl` (number of GPU layers) - set to 0 for CPU-only
-
-### NVIDIA Driver Requirements
-
-The llama.cpp `server-cuda` Docker image requires compatible NVIDIA drivers:
-
-- **CUDA 12.9+ (latest images)**: Requires NVIDIA driver **575.51.03** or newer (Linux) / **576.02** or newer (Windows)
-- **CUDA 12.8**: Requires NVIDIA driver **525.60.13** or newer (Linux) / **528.33** or newer (Windows)
-
-**Common Issue**: If containers fail to start with CUDA version errors, you need to update your NVIDIA drivers.
-
-**See**: [Updating NVIDIA Drivers](../operations/UPDATE_NVIDIA_DRIVERS.md) for detailed instructions.
-
-### CPU-Only Mode
-
-llama.cpp can run entirely on CPU by setting `ngl=0` (no GPU layers). This doesn't require NVIDIA drivers but will be slower.
-
-### Verifying Compatibility
-
-```bash
-# Check driver version (if using GPU)
-nvidia-smi --query-gpu=driver_version --format=csv,noheader
-
-# Test GPU access in Docker (if using GPU)
-docker run --rm --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda nvidia-smi
-```
-
----
-
-## Why llama.cpp Was Added to Cortex
-
-### The GPT-OSS Problem
-
-**OpenAI released GPT-OSS models** (20B and 120B) built on the **Harmony architecture**:
+The llama.cpp adapter (`backend/src/engines/llamacpp.py`) renders one container per model from
+the field table in `backend/src/engines/spec.py`:
 
 ```
-Model: huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated
-Architecture: Harmony (custom, not in HF Transformers)
-Available formats:
-  - Safetensors (BF16) - 240GB weights
-  - GGUF (Q8_0) - ~120GB quantized
-  - GGUF (Q4_K_M) - ~60GB quantized
+docker run --name llamacpp-model-<id> \
+  --label cortex.managed=1 --label cortex.model_id=<id> --label cortex.engine=llamacpp \
+  --network cortex_default -p 127.0.0.1::8000 --ipc host --runtime nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=<selected_gpus> \
+  -v /var/cortex/models:/models:ro \
+  ghcr.io/ggml-org/llama.cpp:server-cuda-b10731 \
+  --model /models/<file>.gguf --alias <served name> --host 0.0.0.0 --port 8000 \
+  --api-key $INTERNAL_VLLM_API_KEY --timeout 300 --metrics --log-timestamps <fields below> <custom args>
 ```
 
-**vLLM Problem:**
-```python
-vllm serve huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated
+- **Ports are published on `127.0.0.1` only**; clients go through the gateway, which presents
+  `INTERNAL_VLLM_API_KEY` (`--api-key`, both engines).
+- **GGUF resolution**: `local_path` may be a `.gguf` file or a folder. A shard other than
+  `00001` is rewritten to the first shard of the *same* set; a folder must contain exactly one
+  GGUF set, otherwise the API asks you to pick the file. Multi-part files are loaded natively -
+  never merge them.
+- **GPU placement**: `selected_gpus` sets `NVIDIA_VISIBLE_DEVICES`; empty means CPU only
+  (`ngl=0`). `tensor_split` is regenerated as an equal split when its arity no longer matches
+  the GPU count.
+- **Managed flags** (`--model`, `-m`, `--alias`, `-a`, `--host`, `--port`, `--api-key`) are
+  rejected in custom args; the `LLAMA_ARG_*` / `LLAMA_API_KEY` env vars are protected.
+- **Dry-run**: `POST /admin/models/dry-run` (body) or `POST /admin/models/{id}/dry-run` returns
+  the redacted command plus `issues[]` (for example "quantized V cache requires flash attention").
 
-Error: "Architecture 'harmony' is not supported"
-# vLLM doesn't have Harmony in its model registry
-# Would need upstream PR to add support
-```
+### Why GGUF always runs here
 
-**llama.cpp Solution:**
-```bash
-llama-server -m gpt-oss-120b.Q8_0.gguf -ngl 999
-
-# Works! llama.cpp loads any GGUF regardless of architecture
-# 120B model serves successfully with quantization
-```
-
-**Result**: Cortex gained llama.cpp engine specifically to serve GPT-OSS models while maintaining the unified admin UX.
+vLLM v0.28 ships no GGUF loader (it is an out-of-tree plugin), and llama.cpp handles sharded
+files, CPU offload and every GGUF architecture. Cortex enforces the policy at validation time:
+a `.gguf` `local_path` with `engine_type=vllm` is rejected. See
+[GGUF format](gguf-format.md) and [Multi-part GGUF](gguf-multipart.md).
 
 ---
 
-## Core Technologies
+## Configuration fields
 
-### 1. GGUF Format
+"Engine default" means Cortex does not emit the flag unless you set the field. Values in the
+Default column are the documented llama-server b10731 defaults. Generated from
+`backend/src/engines/spec.py` by `python3 scripts/gen-engine-flag-tables.py`.
 
-**GGUF** (GPT-Generated Unified Format) - llama.cpp's native format:
+### Common fields (both engines)
 
-**Advantages:**
-- Single-file distribution (easy to share)
-- Embedded metadata (architecture, quantization, rope config)
-- Optimized for CPU inference
-- Supports any model architecture
-- Multiple quantization levels in one file
+<!-- BEGIN GENERATED: common -->
 
-**Structure:**
-```
-gpt-oss-120b.Q8_0.gguf  (119GB)
-├─ Header (GGUF version, tensor count)
-├─ Metadata (architecture, parameters, rope, etc.)
-├─ Tensor info (names, shapes, types)
-└─ Tensor data (quantized weights)
-```
+#### Engine image & startup
 
-**Cortex Support:**
-- GGUF models placed in: `/var/cortex/models/`
-- Single-file or merged multi-part GGUF
-- llama-server loads directly
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `engine_image` | (Cortex-internal, not a flag) | Engine image. Docker image override. Leave blank for the pinned system default. | engine default |  |
+| `engine_version` | (Cortex-internal, not a flag) | Engine version (reference) | engine default |  |
+| `engine_digest` | (Cortex-internal, not a flag) | Engine image digest | engine default |  |
+| `startup_timeout_sec` | (Cortex-internal, not a flag) | Startup timeout (s). How long the model may take to become ready before it is marked failed. | engine default | (min 30) |
 
-### 2. Quantization Levels
+#### GPU placement & parallelism
 
-llama.cpp supports aggressive quantization for VRAM savings:
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `selected_gpus` | (Cortex-internal, not a flag) | GPUs. GPU indices exposed to the container. Empty = CPU mode (vLLM device=cpu, llama.cpp ngl=0). | engine default |  |
 
-| Quantization | Bits per Weight | Size (120B) | Quality | Use Case |
-|--------------|----------------|-------------|---------|----------|
-| **F16** | 16 | ~240GB | Perfect | Baseline (too large) |
-| **Q8_0** | 8 | ~120GB | Excellent | **Recommended for Cortex** |
-| **Q6_K** | 6 | ~90GB | Very Good | Good balance |
-| **Q5_K_M** | 5-6 mixed | ~75GB | Good | Tighter VRAM |
-| **Q4_K_M** | 4-5 mixed | ~60GB | Acceptable | Maximum compression |
-| **Q3_K_M** | 3-4 mixed | ~45GB | Degraded | Experimental |
-| **Q2_K** | 2-3 mixed | ~30GB | Poor | Avoid |
+#### Model behaviour
 
-**Cortex Recommendation for GPT-OSS 120B:**
-- Use **Q8_0** (best quality/size tradeoff)
-- Fits across 4x L40S GPUs (46GB each = 184GB total)
-- Near-lossless quantization
-- Production-ready quality
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `seed` | `--seed VALUE` | Seed. Random seed for sampling reproducibility. | engine default |  |
+| `chat_template` | `--chat-template VALUE` | Chat template (inline, preset name or file under the models dir) | engine default |  |
 
-### 3. CPU+GPU Hybrid Inference
+#### Custom args & environment
 
-llama.cpp's killer feature: **intelligent layer offloading**
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `engine_startup_args_json` | (Cortex-internal, not a flag) | Custom startup args | engine default |  |
+| `engine_startup_env_json` | (Cortex-internal, not a flag) | Custom environment variables | engine default |  |
 
-**Example: 120B model on 4x L40S GPUs:**
+#### Request defaults
 
-```bash
-# Q8_0 quantized = ~120GB weights
-# 4x GPUs = ~184GB VRAM available
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `request_defaults_json` | (Cortex-internal, not a flag) | Request defaults | engine default |  |
+| `request_timeout_sec` | (Cortex-internal, not a flag) | Request timeout (s) | engine default | (min 1) |
+| `stream_timeout_sec` | (Cortex-internal, not a flag) | Stream timeout (s) | engine default | (min 1) |
+<!-- END GENERATED -->
 
-llama-server \
-  -m gpt-oss-120b.Q8_0.gguf \
-  -ngl 999 \                     # Offload all possible layers to GPU
-  --tensor-split 0.25,0.25,0.25,0.25  # Split evenly across 4 GPUs
-  -c 8192 \                      # Context window
-  -b 512                         # Batch size
+### llama.cpp fields
 
-# Result:
-# - Most layers on GPUs (fast)
-# - Spillover to CPU RAM if needed (transparent)
-# - Slower than pure GPU, but works!
-```
+<!-- BEGIN GENERATED: llamacpp -->
 
-**Layer Offload (`-ngl`):**
-```
-ngl=0:     All layers on CPU (slow, ~2-5 tok/s)
-ngl=40:    40 layers on GPU, rest on CPU (mixed, ~10-20 tok/s)
-ngl=999:   All layers on GPU (fast, ~30-50 tok/s)
-```
+#### GPU placement & parallelism
 
-**Cortex Default**: `ngl=999` (offload everything possible)
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `ngl` | `--n-gpu-layers VALUE` | GPU layers (-ngl). Layers to offload to GPU. Empty = auto (engine decides), 0 = CPU only, 999 = all. | engine default | (min 0) |
+| `main_gpu` | `--main-gpu VALUE` | Main GPU | engine default | (min 0) |
+| `split_mode` | `--split-mode VALUE` | Split mode | engine default | `none`, `layer`, `row`, `tensor` |
+| `tensor_split` | `--tensor-split VALUE` | Tensor split. Proportions per GPU, e.g. 3,1. | engine default |  |
+| `n_cpu_moe` | `--n-cpu-moe VALUE` | MoE layers kept on CPU | engine default | (min 0) |
+| `override_tensor` | `--override-tensor VALUE` | Override tensor placement (-ot). pattern=buffer_type,... e.g. exps=CPU | engine default |  |
+| `numa_policy` | `--numa VALUE` | NUMA policy | engine default | `distribute`, `isolate`, `numactl` |
 
-### 4. Tensor Split (Multi-GPU VRAM Distribution)
+#### Memory & KV cache
 
-Distributes model across GPUs:
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `load_mode` | `--load-mode VALUE` | Load mode. Replaces --mlock / --no-mmap / --direct-io. | engine default | `auto`, `none`, `mmap`, `mlock`, `dio` |
+| `context_size` | `--ctx-size VALUE` | Context size (-c, total across slots). Total KV context shared by all slots unless KV is unified. 0 = from model. | engine default | (min 0) |
+| `kv_unified` | `--kv-unified` / `--no-kv-unified` | Unified KV cache | engine default |  |
+| `kv_unified_per_slot` | `--kv-unified-per-slot VALUE` | Per-slot context limit (unified KV) | engine default | (min 1) |
+| `fit_memory` | `--fit on|off` | Auto-fit unset args to VRAM (--fit). When on (engine default) llama.cpp adjusts UNSET -ngl / -c to fit device memory. Turn off for fully explicit configs. | on |  |
+| `cache_type_k` | `--cache-type-k VALUE` | KV cache type K | `f16` | `f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1` |
+| `cache_type_v` | `--cache-type-v VALUE` | KV cache type V. Quantized V cache requires flash attention on. | `f16` | `f32`, `f16`, `bf16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1` |
 
-```bash
-# 4x GPUs, equal split:
---tensor-split 0.25,0.25,0.25,0.25
+#### Throughput & scheduling
 
-# 4x GPUs, unequal (if GPU 0 has less VRAM):
---tensor-split 0.15,0.28,0.28,0.29
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `parallel_slots` | `--parallel VALUE` | Parallel slots (-np). Empty = auto. Each slot gets context_size / slots tokens unless unified KV. | engine default | (min 1) |
+| `flash_attn` | `--flash-attn VALUE` | Flash attention | `auto` | `auto`, `on`, `off` |
+| `batch_size` | `--batch-size VALUE` | Batch size (-b) | `2048` | (min 1) |
+| `ubatch_size` | `--ubatch-size VALUE` | Micro-batch size (-ub) | `512` | (min 1) |
+| `threads` | `--threads VALUE` | CPU threads (-t). Empty = auto. | engine default | (min 1) |
+| `threads_http` | `--threads-http VALUE` | HTTP threads | engine default | (min 1) |
+| `cont_batching` | `--no-cont-batching` when off | Continuous batching | on |  |
+| `cache_reuse` | `--cache-reuse VALUE` | Cache reuse (min chunk) | engine default | (min 0) |
+| `context_shift` | `--context-shift` | Context shift | engine default |  |
 
-# 2x GPUs:
---tensor-split 0.5,0.5
-```
+#### Serving mode
 
-**Cortex Configuration:**
-- Set in Model Form → llama.cpp section
-- Default: Equal split across available GPUs
-- Adjustable for heterogeneous GPU setups
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `enable_embeddings` | `--embeddings` | Enable embeddings endpoint | engine default |  |
+| `pooling` | `--pooling VALUE` | Pooling | engine default | `none`, `mean`, `cls`, `last`, `rank` |
+| `rerank` | `--rerank` | Reranking endpoint | engine default |  |
 
----
+#### Model behaviour
 
-## Cortex llama.cpp Implementation
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `rope_freq_base` | `--rope-freq-base VALUE` | RoPE frequency base | engine default |  |
+| `rope_freq_scale` | `--rope-freq-scale VALUE` | RoPE frequency scale | engine default |  |
+| `jinja_enabled` | `--jinja` / `--no-jinja` | Jinja chat templates | on |  |
+| `chat_template_file` | `--chat-template-file VALUE` | Chat template file Path relative to the models dir (mounted at `/models`). | engine default |  |
+| `chat_template_kwargs_json` | `--chat-template-kwargs '{...}'` | Chat template kwargs (JSON). e.g. {"enable_thinking": false} | engine default |  |
+| `reasoning_format` | `--reasoning-format VALUE` | Reasoning format | engine default | `auto`, `none`, `deepseek`, `deepseek-legacy` |
+| `reasoning_budget` | `--reasoning-budget VALUE` | Reasoning budget (tokens, -1 unlimited) | engine default |  |
+| `n_predict` | `--n-predict VALUE` | Max tokens to predict (-n) | engine default |  |
+| `grammar_file` | `--grammar-file VALUE` | Grammar file (GBNF) Path relative to the models dir (mounted at `/models`). | engine default |  |
 
-### Container Architecture
+#### Adapters, speculative decoding & multimodal
 
-```
-Host Machine
-├─ Docker Network: cortex_default
-└─ llama.cpp Container: llamacpp-model-{id}
-   ├─ Image: cortex/llamacpp-server:latest (custom-built)
-   ├─ Port: 8000 (internal) → Ephemeral host port
-   ├─ Network: Service-to-service via container name
-   ├─ Volumes:
-   │  └─ /models (RO) → Host models directory
-   ├─ Environment:
-   │  ├─ CUDA_VISIBLE_DEVICES=all
-   │  └─ NVIDIA_DRIVER_CAPABILITIES=compute,utility
-   └─ Resources:
-      ├─ GPU: All available (via DeviceRequest)
-      ├─ SHM: 8GB (larger than vLLM for CPU offload)
-      └─ IPC: host mode
-```
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `lora_adapters_json` | `--lora` (repeated) | LoRA adapters (JSON list of path or {path, scale}) | engine default |  |
+| `lora_init_without_apply` | `--lora-init-without-apply` | Load LoRAs without applying | engine default |  |
+| `draft_model_path` | `--model-draft VALUE` | Draft model (GGUF) Path relative to the models dir (mounted at `/models`). | engine default |  |
+| `spec_type` | `--spec-type VALUE` | Speculative type | engine default | `none`, `draft-simple`, `draft-eagle3`, `draft-mtp`, `draft-dflash`, `draft-dspark`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, `ngram-cache` |
+| `draft_n` | `--spec-draft-n-max VALUE` | Draft tokens (max) | `3` | (min 1) |
+| `spec_draft_n_min` | `--spec-draft-n-min VALUE` | Draft tokens (min) | engine default | (min 0) |
+| `draft_p_min` | `--spec-draft-p-min VALUE` | Draft acceptance p_min | engine default | (min 0, max 1) |
+| `spec_draft_ngl` | `--spec-draft-ngl VALUE` | Draft model GPU layers | engine default | (min 0) |
+| `mmproj` | `--mmproj VALUE` | Multimodal projector (GGUF) Path relative to the models dir (mounted at `/models`). | engine default |  |
+| `mmproj_offload` | `--no-mmproj-offload` when off | Offload projector to GPU | on |  |
 
-### Startup Command Example
+#### Logging & diagnostics
 
-For GPT-OSS 120B Q8_0:
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `verbose_logging` | `--verbose` | Verbose logging | engine default |  |
+| `check_tensors` | `--check-tensors` | Check tensors on load | engine default |  |
+| `skip_warmup` | `--no-warmup` | Skip warmup | engine default |  |
+<!-- END GENERATED -->
 
-```bash
-# Container command (built by _build_llamacpp_command()):
-llama-server
--m /models/huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated/Q8_0-GGUF/gpt-oss-120b.Q8_0.gguf
---host 0.0.0.0
---port 8000
--c 8192                           # Context size
--ngl 999                          # GPU layers (all)
--b 512                            # Batch size
--t 32                             # CPU threads
---tensor-split 0.25,0.25,0.25,0.25  # 4-GPU split
---flash-attn on                   # Flash attention
---mlock                           # Lock model in RAM
---no-mmap                         # Disable memory mapping
---numa isolate                    # NUMA policy
-```
+### Removed or renamed since earlier Cortex releases
 
-### GGUF File Resolution
-
-Cortex intelligently resolves GGUF files:
-
-```python
-# If local_path is a .gguf file:
-local_path: "model.Q8_0.gguf"
-→ Uses: /models/model.Q8_0.gguf
-
-# If local_path is a directory:
-local_path: "model-folder"
-→ Scans for .gguf files in folder
-→ Uses first found or specified file
-
-# Special case for GPT-OSS:
-local_path: "huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated"
-→ Uses: /models/.../Q8_0-GGUF/gpt-oss-120b.Q8_0.gguf
-```
+| Old field / flag | Now |
+|---|---|
+| `flash_attn` boolean → `--flash-attn` | `flash_attn` is `auto` / `on` / `off` (`--flash-attn on\|off\|auto`). |
+| `mlock`, `no_mmap`, `--direct-io` | One field: `load_mode` → `--load-mode auto\|none\|mmap\|mlock\|dio`. |
+| `draft_n` → `--draft-max` | Same field, now `--spec-draft-n-max`; `--spec-draft-n-min`, `--spec-draft-p-min`, `--spec-draft-ngl`, `--spec-type` added. |
+| `defrag_thold` / `--defrag-thold` | Removed (KV defragmentation is automatic). |
+| `system_prompt` / `--system-prompt-file` | Removed; put system prompts in the chat template or the request. |
+| `cache_type_v q8_0` as default | Default is `f16`; a quantized V cache requires `flash_attn=on` (validated). |
+| `LLAMACPP_DEFAULT_NGL/BATCH_SIZE/UBATCH_SIZE/THREADS/CONTEXT`, `LLAMACPP_MAX_PARALLEL`, `LLAMACPP_CONT_BATCHING`, `LLAMACPP_CACHE_TYPE_K/V`, `LLAMACPP_LOG_VERBOSE/COLORS`, `LLAMACPP_CHECK_TENSORS`, `LLAMACPP_SKIP_WARMUP`, `LLAMACPP_JINJA_ENABLED`, `LLAMACPP_DEFRAG_THOLD` (gateway env) | Removed. Defaults are the engine's; set per model. Remaining gateway settings: `LLAMACPP_IMAGE`, `LLAMACPP_STARTUP_TIMEOUT`, `LLAMACPP_SERVER_TIMEOUT`, `LLAMACPP_METRICS_ENABLED`, `LLAMACPP_SLOTS_ENABLED`, `LLAMACPP_LOG_TIMESTAMPS`. |
+| `cortex/llamacpp-server:latest` custom image | Never existed as a product artifact; the official `ghcr.io/ggml-org/llama.cpp` image is used. |
+| `-ngl 999` as Cortex default | `ngl` is empty by default: llama.cpp's `--fit on` places as many layers as fit. |
 
 ---
 
-## Configuration Parameters
+## Context, slots and KV cache sizing
 
-### Core Parameters
+`context_size` (`-c`) is the **total** KV context shared by all `parallel_slots` (`-np`). With
+`-c 16384 -np 4` each request gets 4096 tokens. Turn on `kv_unified` to let slots share one
+pool (optionally capped per slot with `kv_unified_per_slot`).
 
-**Context Size** (`-c`):
-```bash
--c 8192    # Default: 8192 tokens
+KV cache memory for the whole context:
 
-# Larger context = more VRAM/RAM
-# Recommendations:
-# - 4096: Conservative, fast
-# - 8192: Balanced (Cortex default)
-# - 16384: Large contexts, needs VRAM
-# - 32768+: Requires significant resources
+```
+bytes = 2 x n_layer x n_ctx x n_embd_k_gqa x bytes_per_element
+        (K and V)                 (= n_head_kv x head_dim)      f16 = 2, q8_0 ≈ 1.06, q4_0 ≈ 0.56
 ```
 
-**GPU Layers** (`-ngl`):
-```bash
--ngl 999   # Default: Offload all layers
-
-# Manual tuning:
-# -ngl 0:   Pure CPU (very slow)
-# -ngl 40:  40 layers on GPU, rest CPU
-# -ngl 999: Automatic (all that fit)
-
-# Cortex default: 999 (let llama.cpp decide)
-```
-
-**Batch Size** (`-b`):
-```bash
--b 512     # Default: 512
-
-# Affects prompt processing speed:
-# Higher: Faster prefill, more VRAM
-# Lower: Slower prefill, less VRAM
-# Range: 128-2048
-```
-
-**CPU Threads** (`-t`):
-```bash
--t 32      # Default: 32 threads
-
-# Set to: (CPU cores - 2) typically
-# For 64-core system: -t 60
-# For 16-core: -t 14
-```
-
-### Performance Flags
-
-**Flash Attention** (`--flash-attn`):
-```bash
---flash-attn on    # Default: on
-
-# Faster attention computation
-# Minimal quality impact
-# Keep enabled unless debugging
-```
-
-**Memory Lock** (`--mlock`):
-```bash
---mlock    # Default: enabled in Cortex
-
-# Locks model in RAM (prevents swapping to disk)
-# Ensures consistent performance
-# Requires sufficient RAM
-```
-
-**Memory Mapping** (`--no-mmap`):
-```bash
---no-mmap  # Default: enabled in Cortex
-
-# Loads model into RAM instead of memory-mapping file
-# Faster inference (no page faults)
-# Requires 2x model size in RAM temporarily
-```
-
-**NUMA Policy** (`--numa`):
-```bash
---numa isolate    # Default: isolate
-
-# Options:
-# - isolate: Bind to single NUMA node (best latency)
-# - distribute: Spread across nodes (better throughput)
-# - none: No NUMA pinning
-```
-
-### RoPE Scaling
-
-For extending context beyond training length:
-
-```bash
---rope-freq-base 10000     # Default from model
---rope-freq-scale 1.0      # Default (no scaling)
-
-# Example: Extend 4K model to 8K context:
---rope-freq-scale 0.5      # Compresses RoPE
-
-# Cortex: Set in Model Form → Advanced llama.cpp section
-```
-
-### Logging Configuration
-
-Configure logging verbosity for debugging:
-
-```bash
-# Via API when creating model:
-{
-  "verbose_logging": true  # Enable detailed logging
-}
-
-# Default settings (in backend/.env):
-LLAMACPP_LOG_VERBOSE=false     # Verbose logging (performance impact)
-LLAMACPP_LOG_TIMESTAMPS=true   # Timestamps in logs (enabled by default)
-LLAMACPP_LOG_COLORS=auto       # Colored logs: on, off, or auto
-```
-
-Verbose logging shows:
-- Detailed model loading information (tensors, metadata)
-- Memory allocation details
-- CUDA device information
-- Inference timing details
-
-**Note**: Verbose logging has a performance impact. Use only for debugging.
-
-### Startup Timeout
-
-Large models (70B+) can take several minutes to load. Configure the startup timeout to prevent premature failures:
-
-```bash
-# Via API when creating model:
-{
-  "startup_timeout_sec": 600  # 10 minutes for very large models
-}
-
-# Default timeouts (in backend/.env):
-LLAMACPP_STARTUP_TIMEOUT=300   # 5 minutes for llama.cpp
-VLLM_STARTUP_TIMEOUT=600       # 10 minutes for vLLM
-```
-
-The startup timeout affects:
-- Docker healthcheck `StartPeriod` - how long Docker waits before marking container unhealthy
-- Initial health polling in the API - how long to wait for model to respond
-
-**Recommendations by model size:**
-| Model Size | Recommended Timeout |
-|------------|---------------------|
-| < 7B       | 60-120 seconds      |
-| 7B-13B     | 120-180 seconds     |
-| 30B-70B    | 300-600 seconds     |
-| 70B+       | 600-900 seconds     |
+Example: Llama-3-8B (32 layers, 8 KV heads x 128 = 1024) at 32k context in f16 =
+`2 x 32 x 32768 x 1024 x 2` ≈ 4.3 GiB; at q8_0 ≈ 2.3 GiB. Cortex's folder inspector reports
+`n_layer` and the head counts from the GGUF header. Weights are on top of that
+(Q4_K_M ≈ 0.6 bytes/param, Q8_0 ≈ 1.07 bytes/param). If weights + KV cache exceed VRAM, lower
+`ngl` (partial CPU offload), reduce `context_size`, quantize the cache
+(`cache_type_k/v=q8_0` with `flash_attn=on`) or, for MoE models, keep experts on CPU
+(`n_cpu_moe`, `override_tensor=exps=CPU`). `fit_memory` (`--fit on`, the default) already
+shrinks *unset* `-ngl`/`-c` to what fits.
 
 ---
 
-## Speculative Decoding
+## Custom arguments and environment
 
-Speculative decoding uses a smaller "draft" model to accelerate inference from a larger "target" model. This can significantly improve throughput without sacrificing quality.
-
-### How It Works
-
-```
-Traditional Inference:
-  Main Model → Generate token 1 → Generate token 2 → ... (slow)
-
-Speculative Decoding:
-  Draft Model → Quickly propose 16 tokens
-  Main Model → Verify all 16 at once → Accept matching tokens
-  Result: Multiple tokens per forward pass!
-```
-
-### Benefits
-
-| Aspect | Improvement |
-|--------|-------------|
-| **Throughput** | 1.5-2x faster generation |
-| **Quality** | Identical output (verification ensures correctness) |
-| **Latency** | Reduced time-to-completion |
-
-### Requirements
-
-1. **Draft Model**: A smaller model of the same architecture family
-2. **Same Tokenizer**: Both models must use the same vocabulary
-3. **GGUF Format**: Both models in GGUF format
-
-### Configuration in Cortex
-
-**Model Form → llama.cpp → Speculative Decoding (Advanced)**:
-
-| Field | Description | Default |
-|-------|-------------|---------|
-| **Draft Model Path** | Path to draft GGUF inside container | (required) |
-| **Draft Tokens (n)** | Tokens to draft per iteration | 16 |
-| **Min Acceptance Probability** | Threshold for accepting drafts | 0.5 |
-
-### Example Setup
-
-**Directory Structure**:
-```
-/var/cortex/models/
-└── mistral-project/
-    ├── Mistral-Small-24B-Q8_0.gguf      # Main model (24B)
-    └── Mistral-Small-DRAFT-0.5B-Q8_0.gguf  # Draft model (0.5B)
-```
-
-**Configuration**:
-```yaml
-# Main model local_path:
-/models/mistral-project/Mistral-Small-24B-Q8_0.gguf
-
-# Speculative decoding settings:
-draft_model_path: /models/mistral-project/Mistral-Small-DRAFT-0.5B-Q8_0.gguf
-draft_n: 16
-draft_p_min: 0.5
-```
-
-**Resulting llama-server command**:
-```bash
-llama-server \
-  --model /models/.../Mistral-Small-24B-Q8_0.gguf \
-  --model-draft /models/.../Mistral-Small-DRAFT-0.5B-Q8_0.gguf \
-  --draft 16 \
-  --draft-p-min 0.5 \
-  # ... other flags
-```
-
-### Finding Draft Models
-
-**Same Architecture Family**:
-- Mistral 24B → Mistral 0.5B DRAFT
-- Llama 3 70B → Llama 3 8B (or smaller)
-- Qwen 72B → Qwen 1.8B
-
-**Community Resources**:
-- HuggingFace: Search for "DRAFT" or "speculative" versions
-- Example: `alamios/Mistral-Small-3.1-DRAFT-0.5B-GGUF`
-
-### Tuning Parameters
-
-**Draft Tokens (n)**:
-- Higher values (24-32): More aggressive speculation
-- Lower values (8-12): More conservative, higher acceptance
-- Default (16): Good balance
-
-**Min Acceptance Probability**:
-- Lower (0.2-0.4): Accept more drafts, potentially more rejections
-- Higher (0.6-0.8): More conservative, fewer but higher-quality drafts
-- Default (0.5): Balanced approach
-
-### Performance Expectations
-
-**Best Case** (matching architectures):
-- 1.8-2x throughput improvement
-- 90%+ draft acceptance rate
-
-**Typical Case**:
-- 1.3-1.5x throughput improvement
-- 70-80% draft acceptance rate
-
-**When to Use**:
-- Long-form generation (articles, code)
-- Single-user deployments
-- When throughput matters more than latency
-
-**When NOT to Use**:
-- Very short responses (< 50 tokens)
-- High-concurrency scenarios
-- Mismatched model architectures
+Any llama-server flag not in the table can be passed as a custom startup arg (short aliases
+such as `-c`, `-ngl`, `-fa`, `-ctk` are normalised to the long form). Custom env vars are
+attached to the container; the protected list (`NVIDIA_VISIBLE_DEVICES`,
+`CUDA_VISIBLE_DEVICES`, `HF_HUB_OFFLINE`, `LLAMA_API_KEY`, `LLAMA_ARG_HOST/PORT/MODEL/API_KEY`,
+`VLLM_API_KEY`) is rejected. See [Setting custom environment variables](setting-custom-env-vars.md).
 
 ---
 
-## OpenAI API Compatibility
-
-llama-server provides OpenAI-compatible endpoints:
-
-### Endpoints Available:
-
-```
-POST /v1/chat/completions    ✓ Chat interface
-POST /v1/completions         ✓ Text completion
-POST /v1/embeddings          ✓ Embeddings (if model supports)
-GET  /v1/models              ✓ List served models
-GET  /health                 ✓ Health check (for Cortex polling)
-GET  /metrics                ✓ Prometheus metrics
-```
-
-### Differences from OpenAI API:
-
-**1. No API key enforcement by default**:
-```python
-# Cortex wraps llama-server with gateway auth
-# Internal communication: No auth needed
-# External access: Gateway enforces API keys
-```
-
-**2. Extended parameters**:
-```json
-{
-  "model": "gpt-oss-120b",
-  "messages": [...],
-  // Standard OpenAI params work
-  "temperature": 0.7,
-  "max_tokens": 256,
-  // llama.cpp extras:
-  "repeat_penalty": 1.1,
-  "top_k": 40,
-  "mirostat": 2
-}
-```
-
-**3. Streaming format**:
-```
-Compatible with OpenAI's Server-Sent Events (SSE)
-Works with OpenAI SDKs without modification
-```
-
----
-
-## Multi-GPU Deployment
-
-### Tensor Split Strategy
-
-llama.cpp uses **layer-based sharding** across GPUs:
-
-**How it works:**
-```
-120-layer model, 4 GPUs, equal split:
-
-GPU 0: Layers 0-29   (30 layers, ~30GB)
-GPU 1: Layers 30-59  (30 layers, ~30GB)
-GPU 2: Layers 60-89  (30 layers, ~30GB)
-GPU 3: Layers 90-119 (30 layers, ~30GB)
-
-Total: 120GB weights fit across 184GB VRAM ✓
-```
-
-**Unequal splits** (if GPUs have different VRAM):
-```bash
-# GPU 0 has 24GB, rest have 48GB each:
---tensor-split 0.15,0.28,0.28,0.29
-
-# Calculation:
-# Total ratio: 0.15 + 0.28 + 0.28 + 0.29 = 1.0
-# GPU 0 gets 15% of model
-# GPU 1-3 get 28-29% each
-```
-
-### Performance Characteristics
-
-**120B Q8_0 on 4x L40S GPUs:**
-
-```
-Configuration:
--ngl 999
---tensor-split 0.25,0.25,0.25,0.25
--c 8192
--b 512
--t 32
-
-Expected Performance:
-- Throughput: ~8-15 tokens/sec (single request)
-- TTFT: 2-4 seconds (depending on prompt length)
-- Context: Up to 8192 tokens
-- Concurrency: 1-2 simultaneous requests
-
-Comparison to vLLM (if it worked):
-- vLLM would be 2-3x faster
-- But vLLM doesn't support Harmony architecture!
-- llama.cpp is the only option for GPT-OSS
-```
-
----
-
-## GGUF Quantization Explained
-
-### Quantization Methods
-
-llama.cpp supports many quantization schemes:
-
-**K-quants** (Recommended):
-```
-Q8_0:    8-bit, per-block scale
-         - Nearly lossless
-         - 2x compression vs FP16
-         - Cortex recommendation for production
-
-Q6_K:    6-bit mixed precision
-         - Good quality
-         - 2.7x compression
-
-Q5_K_M:  5-6 bit mixed
-         - Balanced
-         - 3.2x compression
-
-Q4_K_M:  4-5 bit mixed
-         - High compression
-         - 4x reduction
-         - Acceptable quality
-
-Q3_K_M:  3-4 bit mixed
-         - Extreme compression
-         - 5.3x reduction
-         - Noticeable degradation
-
-Q2_K:    2-3 bit
-         - Maximum compression
-         - Avoid for production
-```
-
-**Legacy quants** (Avoid):
-```
-Q4_0, Q4_1, Q5_0, Q5_1, Q6_0
-# Superseded by K-quants
-# Use Q*_K_M variants instead
-```
-
-### Preparing GGUF for Cortex
-
-**Option 1: Use pre-quantized from HuggingFace:**
-
-```bash
-# Many models have GGUF variants:
-# https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF
-
-# Download to /var/cortex/models/qwen-2.5-7b/
-# Select .gguf file in Cortex Model Form
-```
-
-**Option 2: Quantize yourself:**
-
-```bash
-# 1. Convert HF model to GGUF F16:
-python convert_hf_to_gguf.py /path/to/hf/model
-
-# 2. Quantize to Q8_0:
-llama-quantize model-f16.gguf model-Q8_0.gguf Q8_0
-
-# 3. Place in Cortex models directory:
-mv model-Q8_0.gguf /var/cortex/models/
-```
-
-**Option 3: Merge multi-part GGUF** (for GPT-OSS):
-
-```bash
-# GPT-OSS 120B ships as 9-part GGUF
-# Merge into single file:
-
-llama-gguf-split --merge \
-  Q8_0-GGUF-00001-of-00009.gguf \
-  gpt-oss-120b.Q8_0.gguf
-
-# Result: Single 119GB file ready for llama-server
-```
-
----
-
-## Cortex Configuration
-
-### Model Form - llama.cpp Section
-
-**Engine Selection:**
-```
-Engine Type: llama.cpp (GGUF)
-```
-
-**Required Fields:**
-```
-Mode: Offline (llama.cpp requires local files)
-Local Path: huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated/gpt-oss-120b.Q8_0.gguf
-Name: GPT-OSS 120B Abliterated
-Served Name: gpt-oss-120b-abliterated
-```
-
-**llama.cpp Specific Settings:**
-
-```
-GPU Layers (ngl): 999                          # Offload all
-Tensor Split: 0.25,0.25,0.25,0.25             # 4-GPU equal
-Batch Size: 512                                # Prefill batch
-CPU Threads: 32                                # Background processing
-Context Size: 8192                             # Max context
-Flash Attention: ✓ On                          # Performance
-Memory Lock (mlock): ✓ On                      # Prevent swapping
-Disable Memory Mapping: ✓ On                   # Load to RAM
-NUMA Policy: isolate                           # Latency optimization
-```
-
-**Optional RoPE (for context extension):**
-```
-RoPE Frequency Base: (leave default)
-RoPE Frequency Scale: (leave default unless extending context)
-```
-
----
-
-## Performance Tuning
-
-### Memory Optimization
-
-**For tight VRAM** (e.g., <100GB total):
-
-1. **Use more aggressive quantization:**
-   ```
-   Q8_0 → Q6_K → Q5_K_M → Q4_K_M
-   ```
-
-2. **Reduce context:**
-   ```
-   -c 8192 → -c 4096
-   ```
-
-3. **Lower batch size:**
-   ```
-   -b 512 → -b 256
-   ```
-
-4. **Reduce GPU layers:**
-   ```
-   -ngl 999 → -ngl 80  # Offload fewer layers
-   ```
-
-### Throughput Optimization
-
-**For maximum tokens/sec:**
-
-1. **Increase batch size:**
-   ```
-   -b 512 → -b 1024 or -b 2048
-   # Higher batch = faster prefill
-   # Needs more VRAM
-   ```
-
-2. **Optimize CPU threads:**
-   ```
-   -t 32 → -t (num_cores - 2)
-   # Match hardware topology
-   ```
-
-3. **Enable flash attention:**
-   ```
-   --flash-attn on  # Keep enabled
-   ```
-
-4. **Use mlock:**
-   ```
-   --mlock  # Prevent swapping
-   # Ensures consistent performance
-   ```
-
-### Quality vs Speed
-
-**Quality Priority** (Accuracy over speed):
-```
-Quantization: Q8_0
-Context: 8192+
-Batch: 256-512
-Result: Slower but higher quality
-```
-
-**Speed Priority** (Throughput over quality):
-```
-Quantization: Q5_K_M or Q4_K_M
-Context: 4096
-Batch: 1024-2048
-GPU Layers: -ngl 999
-Result: Faster, some quality loss
-```
-
----
-
-## OpenAI API Integration
-
-### Chat Completions
-
-llama-server exposes standard endpoint:
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-oss-120b",
-    "messages": [
-      {"role": "user", "content": "Hello!"}
-    ],
-    "temperature": 0.7,
-    "max_tokens": 128
-  }'
-```
-
-**Cortex wraps this:**
-```
-User → Cortex Gateway (port 8084)
-     → llama.cpp container (port 8000)
-     → Response → User
-
-# Gateway provides:
-# - API key authentication
-# - Usage tracking
-# - Metrics collection
-# - Circuit breaking
-```
-
-### Streaming
-
-```bash
-curl -N http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-oss-120b",
-    "messages": [...],
-    "stream": true
-  }'
-
-# Server-Sent Events (SSE) format
-# Compatible with OpenAI SDKs
-```
-
----
-
-## Health Checks & Monitoring
-
-### Endpoints for Monitoring
-
-Cortex automatically enables monitoring endpoints for all llama.cpp containers:
-
-**Health** (used by Cortex):
-```bash
-GET /health
-# Returns: {"status": "ok"} when ready
-# Returns: {"error": {...}} with 503 when loading
-
-GET /v1/models
-# Returns list of loaded models
-# Also used as health check fallback
-```
-
-**Metrics** (Prometheus - enabled by default):
-```bash
-GET /metrics
-
-# Cortex enables --metrics flag by default
-# Returns Prometheus-format metrics:
-llamacpp:prompt_tokens_total 1024
-llamacpp:tokens_predicted_total 2048
-llamacpp:kv_cache_usage_ratio 0.65
-llamacpp:requests_processing 2
-llamacpp:prompt_tokens_seconds 150.5      # Prompt throughput
-llamacpp:predicted_tokens_seconds 45.2    # Generation throughput
-```
-
-**Slots Status** (enabled by default):
-```bash
-GET /slots
-
-# Cortex enables --slots flag by default
-# Returns JSON array of slot states:
-[
-  {
-    "id": 0,
-    "n_ctx": 4096,
-    "is_processing": true,
-    "speculative": false
-  },
-  {
-    "id": 1,
-    "n_ctx": 4096,
-    "is_processing": false,
-    "speculative": false
-  }
-]
-```
-
-### Configuration
-
-Metrics and slots endpoints are enabled by default via config settings:
-
-```bash
-# In backend/.env or environment
-LLAMACPP_METRICS_ENABLED=true   # Enable /metrics endpoint
-LLAMACPP_SLOTS_ENABLED=true     # Enable /slots endpoint
-```
-
-To disable (not recommended):
-```bash
-LLAMACPP_METRICS_ENABLED=false
-LLAMACPP_SLOTS_ENABLED=false
-```
+## Request defaults and gateway behaviour
+
+Sampling defaults (`temperature`, `top_p`, `top_k`, penalties) and custom extras in
+`request_defaults_json` are merged by the gateway into requests that omit them and apply
+immediately. They override llama-server's own `--temp`/`--top-p` defaults per request. Server-wide
+generation limits (`n_predict`, `reasoning_budget`) still cap what a request can ask for.
+
+The gateway proxies `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings`
+(`enable_embeddings` + `pooling` for embedding GGUFs, `rerank` for rerankers) and reads
+`/metrics` (`--metrics` from `LLAMACPP_METRICS_ENABLED`, default on; Prometheus discovers the container by label).
+Embedding-task models get `--embeddings` automatically.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-**1. Model Won't Load**
-
-```
-Error: "unable to load model"
-
-Checks:
-1. Verify GGUF file path is correct
-2. Check file permissions (readable)
-3. Ensure enough RAM for model
-4. Check GGUF is valid (not corrupted)
-
-Fix:
-# Test GGUF integrity:
-llama-cli -m model.gguf -p "test" -n 1
-```
-
-**2. OOM on GPU**
-
-```
-Error: "CUDA error: out of memory"
-
-Solutions:
-1. Reduce -ngl (offload fewer layers):
-   -ngl 999 → -ngl 60
-   
-2. Use more aggressive quantization:
-   Q8_0 → Q6_K or Q5_K_M
-   
-3. Reduce context:
-   -c 8192 → -c 4096
-   
-4. Adjust tensor split for unequal GPUs
-```
-
-**3. Slow Performance**
-
-```
-Issue: <5 tokens/sec on GPUs
-
-Checks:
-1. Verify layers on GPU: -ngl should be high
-2. Check GPU utilization: nvidia-smi
-3. Ensure --flash-attn is on
-4. Check --mlock is set
-5. Verify batch size adequate (-b 512+)
-
-If layers on CPU:
-- Increase -ngl
-- Check VRAM usage with nvidia-smi
-- May need more aggressive quantization
-```
-
-**4. Container Restart Loop**
-
-```
-Container keeps restarting:
-
-Check logs:
-docker logs llamacpp-model-1
-
-Common causes:
-- GGUF file not found at specified path
-- Invalid GGUF format
-- Out of memory (CPU or GPU)
-- Unsupported quantization for architecture
-
-Fix: 
-- Review Cortex model logs in UI
-- Verify file path in Model Form
-```
-
----
-
-## Differences from vLLM
-
-### When llama.cpp is Better:
-
-| Feature | vLLM | llama.cpp | Winner |
-|---------|------|-----------|--------|
-| **Architecture support** | HF only | Any GGUF | llama.cpp ✓ |
-| **Quantization** | FP16/8/INT8/AWQ/GPTQ | Q2-Q8 K-quants | llama.cpp ✓ |
-| **CPU inference** | Very slow | Optimized | llama.cpp ✓ |
-| **CPU+GPU hybrid** | No | Yes | llama.cpp ✓ |
-| **Single-file deploy** | No | GGUF! | llama.cpp ✓ |
-
-### When vLLM is Better:
-
-| Feature | vLLM | llama.cpp | Winner |
-|---------|------|-----------|--------|
-| **Throughput** | Excellent (PagedAttention) | Good | vLLM ✓ |
-| **Memory efficiency** | Best (PagedAttention) | Good | vLLM ✓ |
-| **Continuous batching** | Yes | Limited | vLLM ✓ |
-| **Concurrency** | Excellent (100+ requests) | Limited (1-4) | vLLM ✓ |
-| **HF ecosystem** | Native | Via conversion | vLLM ✓ |
-
-### Cortex Strategy:
-
-```
-Standard Models (Llama, Mistral, Qwen):
-→ Use vLLM (better performance)
-
-GPT-OSS 120B / Harmony Architecture:
-→ Use llama.cpp (only option)
-
-GGUF-only models:
-→ Use llama.cpp (native format)
-
-Mixed deployments:
-→ Both engines side-by-side
-→ Gateway routes by model registry
-```
-
----
-
-## Production Deployment
-
-### Container Lifecycle
-
-**Start** (via Cortex UI):
-```
-1. Admin clicks "Start"
-2. Cortex builds llama-server command
-3. Docker creates container: llamacpp-model-{id}
-4. Container pulls cortex/llamacpp-server:latest
-5. llama-server loads GGUF model
-6. Health check polls /v1/models
-7. State: stopped → starting → running
-8. Model registered in gateway
-```
-
-**Stop** (via Cortex UI):
-```
-1. Admin clicks "Stop"
-2. Container stops (graceful shutdown, 10s timeout)
-3. Container removed
-4. State: running → stopped
-5. Model unregistered from gateway
-```
-
-**No auto-restart** (after Cortex restart):
-```
-# Restart policy: "no"
-# Models stay stopped until admin clicks Start
-# Prevents broken auto-start issues
-```
-
-### Health Monitoring
-
-Cortex polls llama.cpp health every 15 seconds:
-
-```bash
-GET http://llamacpp-model-1:8000/v1/models
-
-Success: {"data": [{"id": "gpt-oss-120b"}]}
-→ Health: UP, register in model registry
-
-Failure: Connection refused / timeout
-→ Health: DOWN, circuit breaker may open
-```
-
-### Logs and Debugging
-
-**View logs via Cortex UI:**
-```
-Models page → Select model → Logs button
-Shows: llama-server output, loading progress, errors
-```
-
-**Common log patterns:**
-```
-[Loading model] - Model weights loading
-[KV cache] - VRAM/RAM allocation
-[CUDA] - GPU initialization  
-[Server] - HTTP server ready
-[Inference] - Per-request processing
-```
-
----
-
-## Resource Requirements
-
-### For GPT-OSS 120B Q8_0:
-
-**Minimum** (Cortex tested configuration):
-```
-GPUs: 4x NVIDIA L40S (46GB VRAM each)
-Total VRAM: 184GB
-RAM: 64GB+
-Disk: 150GB (model + overhead)
-CPU: 32+ cores recommended
-```
-
-**Why 4x L40S works:**
-```
-Model weights (Q8_0): ~120GB
-KV cache (8K context): ~8GB
-Overhead: ~3GB per GPU
-Total: ~131GB across 4 GPUs
-Available: 184GB
-Headroom: 53GB ✓
-```
-
-**Alternative configurations:**
-```
-2x H100 (80GB each): 160GB → Tight but possible
-3x A100 (80GB each): 240GB → Comfortable
-8x 3090 (24GB each): 192GB → Works with tuning
-```
-
-### For Smaller Models:
-
-**Llama 2 13B Q4_K_M** (fits single GPU):
-```
-Model: ~7GB
-KV cache: ~2GB (4K context)
-Total: ~9GB
-Fits: Any GPU with 12GB+ (RTX 3060, 4060 Ti, etc.)
-```
-
----
-
-## Best Practices for llama.cpp in Cortex
-
-### 1. Quantization Selection
-
-```
-Production (Quality Priority):
-→ Use Q8_0 (near-lossless)
-
-Balanced (Quality + Size):
-→ Use Q6_K or Q5_K_M
-
-Maximum Compression:
-→ Use Q4_K_M (acceptable trade-off)
-→ Avoid Q3_K or Q2_K (too much degradation)
-```
-
-### 2. Context Window
-
-```
-Conservative (Fast, Reliable):
--c 4096
-
-Balanced (Cortex Default):
--c 8192
-
-Large Context (Needs Resources):
--c 16384 or higher
-```
-
-### 3. GPU Layer Offloading
-
-```
-Default (Let llama.cpp decide):
--ngl 999
-
-Manual Tuning (if needed):
-# Check VRAM usage: nvidia-smi
-# If OOM, reduce layers:
--ngl 80  # Adjust based on available VRAM
-```
-
-### 4. Multi-GPU Split
-
-```
-Equal GPUs:
---tensor-split 0.25,0.25,0.25,0.25
-
-Unequal GPUs (e.g., 3x 48GB + 1x 24GB):
---tensor-split 0.34,0.34,0.34,0.17
-# Give less to smaller GPU
-```
-
----
-
-## Comparison: llama.cpp vs vLLM in Cortex
-
-### Use llama.cpp When:
-
-1. **Model architecture unsupported by vLLM**
-   - GPT-OSS 120B (Harmony) ✓
-   - Experimental/custom architectures
-   - Models requiring trust_remote_code that vLLM rejects
-
-2. **GGUF is only available format**
-   - Community quantizations
-   - Pre-converted models
-   - Air-gapped environments with GGUFs
-
-3. **CPU+GPU hybrid needed**
-   - Limited VRAM (can offload layers to RAM)
-   - Heterogeneous GPU setups
-
-4. **Simpler deployment**
-   - Single GGUF file
-   - No tokenizer issues
-   - Works "out of box"
-
-### Use vLLM When:
-
-1. **Architecture is supported**
-   - Llama, Mistral, Qwen, Phi, etc.
-   - Standard HF Transformers models
-
-2. **Need maximum performance**
-   - PagedAttention efficiency
-   - Continuous batching
-   - High concurrency (50+ simultaneous)
-
-3. **Pure GPU inference**
-   - Sufficient VRAM available
-   - Want best throughput
-
-4. **Online model serving**
-   - Download from HF on startup
-   - Automatic model updates
-
----
-
-## Integration with Cortex Gateway
-
-### Model Registry
-
-When llama.cpp container starts:
-
-```python
-# Cortex registers endpoint:
-register_model_endpoint(
-    served_name="gpt-oss-120b-abliterated",
-    url="http://llamacpp-model-1:8000",
-    task="generate"
-)
-
-# Gateway routes requests:
-POST /v1/chat/completions {"model": "gpt-oss-120b-abliterated"}
-→ Proxied to: http://llamacpp-model-1:8000/v1/chat/completions
-```
-
-### Monitoring
-
-Health poller checks every 15 seconds:
-```
-GET http://llamacpp-model-1:8000/v1/models
-Response: {"data": [{"id": "gpt-oss-120b-abliterated"}]}
-Status: UP
-```
-
-Circuit breaker opens after 5 consecutive failures (30s cooldown).
-
-### Usage Tracking
-
-Cortex tracks per-request:
-```
-- Prompt tokens (estimated if llama-server doesn't report)
-- Completion tokens
-- Latency
-- Status code
-- Model name: gpt-oss-120b-abliterated
-- Task: generate
-```
-
----
-
-## Migration Guide
-
-### From Standalone llama.cpp to Cortex
-
-**Before** (manual llama-server):
-```bash
-llama-server \
-  -m /models/model.gguf \
-  -ngl 999 \
-  --tensor-split 0.25,0.25,0.25,0.25 \
-  -c 8192 \
-  --host 0.0.0.0 --port 8080
-```
-
-**After** (Cortex managed):
-```
-1. Add model via Cortex UI
-2. Configure parameters in Model Form
-3. Click "Start"
-4. Cortex creates container automatically
-5. Monitor via System Monitor
-6. Track usage via Usage page
-```
-
-**Benefits:**
-- Health monitoring
-- Usage metering
-- API key auth
-- Multi-user access
-- Web UI management
-
----
-
-## Advanced Configuration Options
-
-### Custom Arguments Validation
-
-Cortex validates custom startup arguments with an allowlist of valid llama.cpp flags:
-
-```bash
-# If you add a custom argument with a typo, dry-run will warn you:
-"engine_startup_args_json": "[{\"flag\": \"--flash-atten\", \"type\": \"bool\", \"value\": true}]"
-
-# Dry-run output:
-{
-  "warnings": [
-    {
-      "severity": "info",
-      "title": "Unknown Flag",
-      "message": "Unknown flag '--flash-atten' - did you mean '--flash-attn'?",
-      "fix": "Did you mean '--flash-attn'?"
-    }
-  ]
-}
-```
-
-Unknown flags are allowed to pass through with a warning, but typos are detected using fuzzy matching.
-
-### LoRA Adapter Support
-
-llama.cpp supports dynamic LoRA adapter loading:
-
-```json
-{
-  "lora_adapters_json": "[{\"path\": \"my-lora.gguf\", \"scale\": 0.8}]",
-  "lora_init_without_apply": false
-}
-```
-
-**Configuration:**
-- `lora_adapters_json`: JSON array of LoRA adapter paths (or objects with `path` and `scale`)
-- `lora_init_without_apply`: Load adapters without applying (can be applied via runtime API)
-
-**Resulting flags:**
-```bash
---lora /models/my-lora.gguf --lora-scaled /models/my-lora.gguf 0.8
-```
-
-### Grammar/Constrained Generation
-
-Enforce structured output using GBNF grammars:
-
-```json
-{
-  "grammar_file": "grammars/json.gbnf"
-}
-```
-
-**Resulting flag:**
-```bash
---grammar-file /models/grammars/json.gbnf
-```
-
-Place grammar files in your models directory and reference them by relative path.
-
-### Model Alias
-
-Control the model name returned by `/v1/models`:
-
-```json
-{
-  "served_model_name": "my-custom-model-name"
-}
-```
-
-**Resulting flag:**
-```bash
---alias my-custom-model-name
-```
-
-### Embedding Mode
-
-Enable the embeddings endpoint for embedding models:
-
-```json
-{
-  "task": "embed",
-  // OR
-  "enable_embeddings": true
-}
-```
-
-**Resulting flag:**
-```bash
---embeddings
-```
-
-### System Prompt
-
-Set a default system prompt for all conversations:
-
-```json
-{
-  "system_prompt": "You are a helpful assistant. Always be concise and clear."
-}
-```
-
-The prompt is written to a file and passed via `--system-prompt-file`.
-
-### Continuous Batching Toggle
-
-Override the global continuous batching setting per model:
-
-```json
-{
-  "cont_batching": false  // Disable for this model (lower latency)
-}
-```
-
-When `false`, the `--cont-batching` flag is omitted.
-
-### KV Cache Defragmentation
-
-Configure KV cache defragmentation for long-running sessions:
-
-```json
-{
-  "defrag_thold": 0.1  // Defrag when 10% of KV cache is fragmented
-}
-```
-
-**Resulting flag:**
-```bash
---defrag-thold 0.1
-```
-
-Set to `-1` (default) to disable.
-
----
-
-## Future Enhancements
-
-### Planned for Cortex:
-
-1. **RoPE Extension UI**
-   - Slider for context extension
-   - Auto-calculate rope_freq_scale
-
-2. **Quantization Conversion**
-   - In-UI quantization from F16 to Q8_0
-   - Progress tracking
-
-3. **Multi-Model Serving**
-   - Load multiple GGUFs in single container
-   - Dynamic model switching
-
-4. **Built-in Grammar Templates**
-   - JSON, list, and other common grammars
-   - Grammar file upload via UI
-
----
-
-## References
-
-- **Official Repo**: https://github.com/ggml-org/llama.cpp
-- **Documentation**: https://github.com/ggml-org/llama.cpp/tree/master/docs
-- **Docker Images**: ghcr.io/ggml-org/llama.cpp:server-cuda
-- **Cortex Implementation**: `backend/src/docker_manager.py` (lines 182-325)
-- **GGUF Spec**: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
-- **GPT-OSS Models**: https://huggingface.co/collections/openai/gpt-oss-67723e53c50e1ec6424f71c4
-
----
-
-## Conclusion
-
-**llama.cpp in Cortex serves a critical role:**
-
-✅ **Enables GPT-OSS 120B** - The primary reason it was added  
-✅ **Fills vLLM gaps** - Custom architectures, GGUF-only models  
-✅ **Production-ready** - Stable, reliable, well-tested  
-✅ **Unified UX** - Same admin interface as vLLM  
-✅ **Complementary** - Works alongside vLLM, not replacing it  
-
-**Together, vLLM + llama.cpp provide comprehensive model serving for Cortex users.** 🚀
-
----
-
-**For vLLM (standard models), see**: `vllm.md` (in this directory)  
-**For choosing between engines**: See `engine-comparison.md` (in this directory) - comprehensive decision matrix and comparison  
-**For research background**: See `engine-research.md` (in this directory)
-
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `state=failed`, reason `container_exited: ... error loading model` | wrong file (shard 2, folder with several sets) | pick the first shard / the exact file |
+| `cudaMalloc failed` / OOM | weights + KV cache > VRAM | see sizing above: lower `ngl`, `context_size`, quantize KV |
+| very slow generation, GPU idle | `ngl` too low or CPU-only | set `ngl=999` (all layers) and check `selected_gpus` |
+| `state_reason=startup_timeout_after_300s` | large model still loading | raise `startup_timeout_sec` (`LLAMACPP_STARTUP_TIMEOUT` default 300) |
+| requests truncated at ~1k tokens | `context_size / parallel_slots` too small | raise `-c`, lower `-np`, or `kv_unified=on` |
+| `quantized V cache requires flash attention` | `cache_type_v` set with `flash_attn=off` | set `flash_attn=on` |
+| `nvidia-container-cli ... cuda>=12.8` | driver < 550 | update the driver or use an older `server-cuda-b*` image as `engine_image` |
+
+Related: [Engine comparison](engine-comparison.md), [Model management](model-management.md),
+[Runbooks](../operations/runbooks.md).

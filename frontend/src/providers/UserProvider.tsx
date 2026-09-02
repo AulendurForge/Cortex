@@ -43,9 +43,13 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (data && data.username) {
           setUser({ name: data.username, role: (String(data.role).toLowerCase() === 'admin' ? 'admin' : 'user') });
         }
-      } catch {
-        // If unauthenticated, clear any dev local user to avoid stale header
-        try { localStorage.removeItem('cortex_user_name'); localStorage.removeItem('cortex_user_role'); } catch {}
+      } catch (e: any) {
+        // Only a definite 401 means "no session". A network failure (gateway
+        // unreachable) must not wipe the locally remembered user, and neither
+        // must a slow /auth/me that resolves after a successful login.
+        if (e && typeof e.code === 'number' && e.code === 401) {
+          try { localStorage.removeItem('cortex_user_name'); localStorage.removeItem('cortex_user_role'); } catch {}
+        }
       }
     })();
   }, []);

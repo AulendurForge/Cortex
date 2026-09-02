@@ -1,200 +1,81 @@
 # Threat Model
 
-This document identifies threats to Cortex deployments and mitigation strategies.
-
----
+Assets, actors and the mitigations Cortex provides versus the ones the deployment must add.
+Implementation details are in [Security](security.md).
 
 ## Assets
 
-### High Value
-- **API Keys**: Provide access to inference endpoints
-- **Admin Credentials**: Full system control
-- **Model Weights**: Proprietary or licensed models
-- **User Data**: Organizations, users, usage logs
+| Asset | Value | Where it lives |
+|---|---|---|
+| API keys (bcrypt hashes + prefixes), admin credentials | high | Postgres |
+| Session secret | high | `SESSION_SECRET` env or `config_kv` |
+| `INTERNAL_VLLM_API_KEY` | high | env; passed to every model container |
+| HuggingFace tokens | medium | `models.hf_token` (plaintext), never returned by the API |
+| Model weights | medium-high (licensing) | `/var/cortex/models`, HF cache |
+| Usage metadata, model configuration | medium | Postgres; deployment exports |
+| The Docker socket | critical | mounted into the gateway |
 
-### Medium Value
-- **Configuration**: System settings, CORS, rate limits
-- **HuggingFace Tokens**: Access to gated models
-- **Database**: All persistent state
+## Actors
 
----
+| Actor | Capability |
+|---|---|
+| LAN client without a key | can reach `:8084` and `:3001` unless firewalled; cannot reach model engines (loopback only) |
+| Holder of a valid API key | inference within scopes; rate/concurrency limited |
+| Admin session holder | full control incl. starting containers with arbitrary args/env |
+| Someone with shell on the host | root-equivalent through the Docker socket; everything |
+| Malicious model checkpoint | code execution inside a model container (`trust_remote_code`, custom archs) |
 
-## Threat Actors
-
-| Actor | Capability | Motivation |
-|-------|------------|------------|
-| External Attacker | Network access | Data theft, service abuse |
-| Malicious User | Valid API key | Quota abuse, data exfiltration |
-| Insider | Admin access | Data theft, sabotage |
-| Automated Bot | Scripted attacks | Resource exhaustion |
-
----
-
-## Threats & Mitigations
-
-### T1: Unauthorized API Access
-**Threat**: Attacker gains access to inference endpoints without valid credentials.
-
-**Mitigations**:
-- API key authentication on all `/v1/*` endpoints
-- Keys are hashed before storage
-- Scoped permissions limit access
-- Rate limiting prevents brute force
-
-### T2: Admin Panel Compromise
-**Threat**: Attacker gains access to admin functionality.
-
-**Mitigations**:
-- Session-based authentication
-- Disable dev bypass in production (`GATEWAY_DEV_ALLOW_ALL_KEYS=false`)
-- Strong password requirements
-- CORS restrictions prevent CSRF
-
-### T3: API Key Theft
-**Threat**: Valid API keys are stolen and misused.
-
-**Mitigations**:
-- Keys shown only once at creation
-- Keys can be revoked immediately
-- Usage logging enables detection
-- Scope restrictions limit impact
-
-### T4: Data Exfiltration
-**Threat**: Sensitive data extracted from system.
-
-**Mitigations**:
-- Database credentials are hashed
-- HF tokens redacted in exports
-- Network isolation for internal services
-- Audit logging for detection
-
-### T5: Denial of Service
-**Threat**: System overwhelmed by excessive requests.
-
-**Mitigations**:
-- Rate limiting (RPS + burst)
-- Concurrent stream limits
-- Circuit breaker for failing upstreams
-- Request size limits
-
-### T6: Model Container Escape
-**Threat**: Malicious model code escapes container.
-
-**Mitigations**:
-- Containers run with limited privileges
-- Network isolated to cortex_default
-- No host filesystem access (read-only mounts)
-- Regular image updates
-
-### T7: Supply Chain Attack
-**Threat**: Compromised dependencies or images.
-
-**Mitigations**:
-- Pin Docker image versions
-- Verify checksums for offline packages
-- Review model sources
-- Monitor for security advisories
-
-### T8: Network Eavesdropping
-**Threat**: Traffic intercepted on network.
-
-**Mitigations**:
-- TLS termination at reverse proxy
-- Internal traffic stays on Docker network
-- Sensitive headers not logged
-
----
-
-## Risk Matrix
-
-| Threat | Likelihood | Impact | Risk Level |
-|--------|------------|--------|------------|
-| T1: Unauthorized API Access | Medium | High | **High** |
-| T2: Admin Compromise | Low | Critical | **High** |
-| T3: API Key Theft | Medium | Medium | **Medium** |
-| T4: Data Exfiltration | Low | High | **Medium** |
-| T5: Denial of Service | High | Medium | **Medium** |
-| T6: Container Escape | Very Low | Critical | **Low** |
-| T7: Supply Chain | Low | High | **Medium** |
-| T8: Eavesdropping | Medium | Medium | **Medium** |
-
----
-
-## Security Boundaries
+## Trust boundaries
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Internet                        │
-└─────────────────────────────────────────────────┘
-                      │
-                      ▼ (TLS)
-┌─────────────────────────────────────────────────┐
-│              Reverse Proxy                       │
-│         (nginx/traefik - TLS termination)       │
-└─────────────────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────┐
-│              Docker Network                      │
-│  ┌─────────────┐  ┌─────────────┐               │
-│  │   Gateway   │  │  Frontend   │               │
-│  │ (auth/rate) │  │    (UI)     │               │
-│  └─────────────┘  └─────────────┘               │
-│         │                                        │
-│         ▼                                        │
-│  ┌─────────────┐  ┌─────────────┐               │
-│  │  PostgreSQL │  │    Redis    │               │
-│  │  (data)     │  │   (cache)   │               │
-│  └─────────────┘  └─────────────┘               │
-│         │                                        │
-│         ▼                                        │
-│  ┌─────────────────────────────────────────┐    │
-│  │         Model Containers                 │    │
-│  │    (vLLM / llama.cpp - isolated)        │    │
-│  └─────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────┘
+Internet / LAN ──TLS proxy (you)──► gateway :8084 (host net, non-root, docker.sock)
+                                  │            └──► Docker daemon ──► model containers (127.0.0.1:<port>, --api-key)
+                                  ├──► UI :3001 (loopback in prod)
+                                  └──► Postgres / Redis / Prometheus (loopback)
 ```
 
----
+## Threats and mitigations
 
-## Compliance Considerations
+| # | Threat | Cortex mitigation | Deployment must add |
+|---|---|---|---|
+| T1 | Unauthenticated inference | bcrypt-hashed keys, scopes, `GATEWAY_DEV_ALLOW_ALL_KEYS=false` default | keep dev bypass off; firewall 8084 |
+| T2 | Admin takeover | signed sessions (HMAC-SHA256, expiry), `HttpOnly`/`SameSite=Lax`, bcrypt passwords, all `/admin` behind `require_admin`, bootstrap only while no admin exists | TLS + `SESSION_COOKIE_SECURE=true`, strong passwords (`make setup-admin`, 8+ characters, no defaults), SSO/VPN in front |
+| T3 | Key theft / replay | shown once, revocable, per-key usage rows | short expiries, monitor usage |
+| T4 | Bypassing the gateway to the engine | engine ports on `127.0.0.1` only, `--api-key` on both engines | nothing else on the host loopback should be untrusted |
+| T5 | Denial of service | body size limit, rate limit, concurrency cap, per-model timeouts, circuit breaker | proxy-level limits, GPU capacity planning |
+| T6 | Container escape / malicious weights | no added capabilities, ro model mount, forbidden flags/env, protected GPU env | vet checkpoints; `trust_remote_code` only for known models; keep engine images pinned and updated |
+| T7 | Abuse of the Docker socket via the gateway | gateway runs non-root, only the socket group added; container args validated (`custom_arg_forbidden`, `env_var_protected`) | treat the gateway host as sensitive; no other consumers of the socket |
+| T8 | Supply chain (images, wheels, models) | pinned tags in `versions.env`, offline package checksums, `make prod-check` rejects `latest` | verify digests, scan images, private registry |
+| T9 | Eavesdropping | none (plain HTTP) | TLS proxy, HSTS at the proxy |
+| T10 | Data exfiltration via exports/backups | `hf_token` redacted in exports | protect `/var/cortex/exports` and `backups/` |
+| T11 | CSRF against admin | `SameSite=Lax` cookie, CORS allowlist with credentials | single origin behind the proxy |
 
-### For Air-Gapped Deployments
-- Offline package includes integrity checksums (SHA256)
-- No external network calls after deployment
-- All images loaded from verified local files
-- Suitable for ITAR, FedRAMP, DoD environments
+## Residual risks (known gaps)
 
-### For Enterprise
-- Audit logs for compliance reporting
-- Role-based access control
-- API key management with revocation
-- Usage tracking for billing/allocation
+- No MFA, lockout or password policy on admin accounts.
+- `hf_token` stored in plaintext.
+- `/metrics` and `/health` are unauthenticated.
+- No per-request content logging, hence no forensic record of prompts.
+- The gateway needs the Docker socket; a gateway compromise equals host compromise.
+- Model containers run with `--ipc host`.
 
----
+## Risk matrix
 
-## Recommendations by Environment
+| Threat | Likelihood | Impact | Level |
+|---|---|---|---|
+| T1 Unauthenticated inference | low (default off) | high | medium |
+| T2 Admin takeover | low with TLS | critical | high |
+| T4 Engine bypass | very low | high | low |
+| T5 DoS | high | medium | medium |
+| T6 Malicious weights | low | critical | medium |
+| T7 Socket abuse | low | critical | medium |
+| T8 Supply chain | low | high | medium |
+| T9 Eavesdropping | medium without TLS | medium | medium |
 
-### Development
-- Dev bypass acceptable for local testing
-- Use default credentials for convenience
-- Monitor logs for unexpected access
+## Environments
 
-### Staging
-- Disable dev bypass
-- Use production-like configuration
-- Test security controls
-
-### Production
-- All mitigations enabled
-- TLS required
-- Regular security reviews
-- Incident response plan documented
-
----
-
-## See Also
-
-- [Security Guide](security.md) — Implementation details
-- [Configuration](../getting-started/configuration.md) — Security settings
-- [Admin Setup](../getting-started/admin-setup.md) — Production hardening
+- **Development**: dev bypass on, everything on the LAN; acceptable only on a
+  trusted network.
+- **Air-gapped**: same controls; supply-chain risk moves to the offline package (checksums,
+  `OFFLINE_MODE=true`, `REQUIRE_IMAGE_PRECACHE=true`).
+- **Production**: `make prod-check` green, TLS proxy, firewalled ports, backups, monitoring.

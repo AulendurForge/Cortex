@@ -226,6 +226,6 @@ sudo ufw enable
 ## Related Documentation
 
 - [External Applications Integration](../integration/external-applications.md)
-- [Quickstart (Docker)](../getting-started/quickstart-docker.md)
+- [Quick start](../getting-started/quick-start.md)
 - [Security Posture](../security/security.md)
 

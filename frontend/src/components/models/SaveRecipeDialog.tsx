@@ -56,11 +56,9 @@ export function SaveRecipeDialog({
       setDescription('');
       onSuccess();
       onClose();
-    } catch (error: any) {
-      addToast({ 
-        title: `Catalog error: ${error?.message || 'Unknown error'}`, 
-        kind: 'error' 
-      });
+    } catch (error: unknown) {
+      const msg = (error as { message?: string })?.message || 'Unknown error';
+      addToast({ title: 'Could not save recipe', description: msg, kind: 'error' });
     } finally {
       setIsLoading(false);
     }

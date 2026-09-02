@@ -6,11 +6,11 @@ import { useToast } from '../../providers/ToastProvider';
 import { cn } from '../../lib/cn';
 import { safeCopyToClipboard } from '../../lib/clipboard';
 
-type TestResult = {
+export type TestResult = {
   success: boolean;
   test_type: 'chat' | 'embeddings';
-  request: any;
-  response: any;
+  request: unknown;
+  response: unknown;
   error: string | null;
   latency_ms: number;
   timestamp: number;
@@ -30,6 +30,10 @@ export function TestResultsModal({
   const { addToast } = useToast();
   
   if (!result) return null;
+  const usage = (() => {
+    const r = result.response as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } } | null | undefined;
+    return r && typeof r === 'object' && r.usage && typeof r.usage === 'object' ? r.usage : null;
+  })();
   
   const copyResults = async () => {
     const text = JSON.stringify(result, null, 2);
@@ -61,7 +65,7 @@ export function TestResultsModal({
             <code>{JSON.stringify(result.request, null, 2)}</code>
           </pre>
 
-          {result.response && (
+          {!!result.response && (
             <>
               <SectionTitle variant="cyan" className="text-[9px]">Gateway Response</SectionTitle>
               <pre className="text-[10px] bg-black/40 rounded-xl p-3 overflow-x-auto max-h-48 overflow-y-auto border border-white/5 font-mono text-blue-300/80 shadow-inner custom-scrollbar">
@@ -72,12 +76,12 @@ export function TestResultsModal({
         </div>
         
         {/* Token Usage */}
-        {result.response?.usage && (
+        {usage && (
           <InfoBox variant="blue" title="Efficiency Metrics" className="text-[10px] p-2">
             <div className="flex gap-4">
-              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Prompt:</span> <span className="font-mono text-white/90">{result.response.usage.prompt_tokens || 0}</span></div>
-              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Gen:</span> <span className="font-mono text-white/90">{result.response.usage.completion_tokens || 0}</span></div>
-              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Total:</span> <span className="font-mono text-indigo-300 font-bold">{result.response.usage.total_tokens || 0}</span></div>
+              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Prompt:</span> <span className="font-mono text-white/90">{usage.prompt_tokens || 0}</span></div>
+              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Gen:</span> <span className="font-mono text-white/90">{usage.completion_tokens || 0}</span></div>
+              <div><span className="text-white/40 uppercase font-bold text-[8px] mr-1">Total:</span> <span className="font-mono text-indigo-300 font-bold">{usage.total_tokens || 0}</span></div>
             </div>
           </InfoBox>
         )}

@@ -18,7 +18,7 @@ Cortex manages Docker containers for each model (vLLM and llama.cpp). This guide
 vllm-model-{id}
 ```
 - Example: `vllm-model-2` for model with database ID 2
-- Image: `vllm/vllm-openai:latest`
+- Image: `vllm/vllm-openai:v0.28.0` (`VLLM_IMAGE`, or the model's `engine_image`)
 - Network: `cortex_default`
 
 ### llama.cpp Containers
@@ -26,7 +26,7 @@ vllm-model-{id}
 llamacpp-model-{id}
 ```
 - Example: `llamacpp-model-4` for model with database ID 4
-- Image: `ghcr.io/ggml-org/llama.cpp:server-cuda`
+- Image: `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` (`LLAMACPP_IMAGE`, or the model's `engine_image`)
 - Network: `cortex_default`
 
 ---
@@ -55,7 +55,7 @@ stopped → starting → loading → running
 ```
 
 **Container Configuration**:
-- Restart policy: `no` (manual start only)
+- Restart policy: `no` (the supervisor, not Docker, decides when to restart; see runbooks → reboot recovery)
 - Network: `cortex_default` (service-to-service communication)
 - Volumes: Models directory mounted read-only
 - GPU: Allocated via NVIDIA runtime (if ngl > 0)
@@ -76,24 +76,15 @@ stopped → starting → loading → running
 
 ### On Gateway Shutdown (make down / docker compose down)
 
-**NEW: Automatic Model Container Cleanup** ✅
+Model containers are **not** stopped when the gateway stops (`STOP_MODELS_ON_SHUTDOWN=false`,
+the default). They keep serving; when the gateway comes back its supervisor re-adopts every
+container labelled `cortex.managed=1`, re-registers it for routing and resumes health
+probing. Set `STOP_MODELS_ON_SHUTDOWN=true` to get the old "stop everything" behaviour, or run
+`make clean-models` explicitly.
 
-**Sequence**:
-1. Gateway receives shutdown signal
-2. Queries database for all running models
-3. Stops each model container
-4. Updates all models to "stopped" state
-5. Clears container_name and port fields
-6. Gateway shuts down
-
-**Log Output**:
-```
-[shutdown] Stopping all managed model containers...
-[shutdown] Stopping container for model 4 (huihui-ai 120B)...
-[shutdown] Stopped 1 model container(s)
-```
-
-**Benefit**: Model containers don't persist after Cortex shutdown
+**Reconciliation** (`MODEL_RECONCILE_SEC`, default 15 s): rows in `running`/`loading` whose
+container disappeared become `stopped` (`state_reason=container_not_found`); containers whose
+engine stops answering `/health` move the row to `failed` (`engine_unhealthy: ...`).
 
 ---
 
@@ -104,7 +95,7 @@ stopped → starting → loading → running
 **Definition**: A model container that is running but:
 - Not in the database (deleted model)
 - Database shows "stopped" but container still running
-- From previous Cortex instance (before shutdown hook)
+- Left over from a deleted model
 
 ### Automatic Detection
 
@@ -113,18 +104,14 @@ stopped → starting → loading → running
 $ make down
 
 Stopping Cortex services...
-Note: Model containers will be stopped by gateway shutdown hook
 ✓ Services stopped
-
-Checking for orphaned model containers...
-Found 2 orphaned model container(s)
-Run 'make clean-models' to remove them
+2 model container(s) still running (the gateway re-adopts them on restart).
+Run 'make clean-models' to remove them.
 ```
 
 **Detection Logic**:
-- Scans for containers matching `vllm-model-*` or `llamacpp-model-*`
-- Counts running containers
-- Alerts if any found after gateway shutdown
+- Counts running containers labelled `cortex.managed=1`
+- Reports them; they are deliberately left running
 
 ---
 
@@ -197,15 +184,12 @@ docker ps -a -q --filter "name=llamacpp-model-" | xargs -r docker rm
 7. New models can't use same ports
 ```
 
-**After Shutdown Hook** (New Behavior):
+**Current behaviour**:
 ```
 1. make down
-2. Gateway receives shutdown signal
-3. Gateway stops all model containers ✅
-4. Gateway shuts down
-5. make up
-6. Gateway starts fresh
-7. No orphaned containers ✓
+2. Gateway shuts down; model containers keep serving
+3. make up
+4. Supervisor re-adopts the running containers (same ports, no reload) ✓
 ```
 
 ### Scenario 2: Gateway Crash (Unexpected)

@@ -1,186 +1,50 @@
-# Deployments
+# Deployment Options
 
-This guide covers deployment options for Cortex, from development to production environments.
+| Scenario | Guide |
+|---|---|
+| Developer / lab box, LAN access | [Quick start](../getting-started/quick-start.md) (`make quick-start`) |
+| Production with TLS, real secrets, built images | [Production deployment](production-deployment.md) (`make prod-check && make up ENV=prod`) |
+| Air-gapped / classified network | [Offline deployment](offline-deployment.md) (bundles: `make prepare-offline` → drive → `make load-offline` / Transfer page) |
+| Moving a deployment to another host | [Backup & restore](backup-restore.md) (Transfer bundles with a database dump) |
 
----
+## What the two compose files differ in
 
-## Quick Start (Recommended)
+| | `docker.compose.dev.yaml` | `docker.compose.prod.yaml` |
+|---|---|---|
+| Images | `cortex-gateway:dev`, `cortex-frontend:dev` (`next dev`, source bind-mounted) | `cortex-gateway:<CORTEX_VERSION>`, `cortex-frontend:<CORTEX_VERSION>` (`next build`) |
+| Auth | `GATEWAY_DEV_ALLOW_ALL_KEYS=true`; admin credentials and internal key from `.env` (`make up` asks/generates) | `false`; `INTERNAL_VLLM_API_KEY`, `SESSION_SECRET`, `ADMIN_BOOTSTRAP_PASSWORD`, `CORS_ALLOW_ORIGINS` required |
+| Cookies | `SESSION_COOKIE_SECURE=false` | `true` |
+| Limits | rate/concurrency limits off | on; memory limits, log rotation |
+| UI bind | `0.0.0.0:3001` | `127.0.0.1:3001` (behind the proxy) |
+| pgadmin | `tools` profile, loopback | absent |
+| Prometheus retention | 7d | 15d / 10 GB |
+| Restart policy / healthchecks | yes | yes |
 
-```bash
-make quick-start
-```
+Both use host networking for the gateway (`:8084`), pinned images from `versions.env`, the
+`linux` / `gpu` monitoring profiles, and the same Prometheus configuration.
 
-This single command:
-- Auto-detects your host IP
-- Configures CORS for network access
-- Creates the default admin user
-- Enables monitoring on Linux
-- Starts all services
-
----
-
-## Deployment Options
-
-### Development Mode
-
-Best for local development and testing:
-
-```bash
-# Using Makefile (recommended)
-make up
-
-# Or direct Docker Compose
-docker compose -f docker.compose.dev.yaml up --build
-```
-
-**Features:**
-- Hot-reload for frontend
-- Debug logging enabled
-- Dev auth bypass available
-- SQLite-compatible dev settings
-
-### Production Mode
-
-For production deployments:
+## Profiles
 
 ```bash
-make up ENV=prod
-
-# Or direct
-docker compose -f docker.compose.prod.yaml up -d
+make up                              # auto: linux(,gpu) on Linux hosts
+make up PROFILES=linux,gpu,tools     # + pgadmin (dev)
+make up PROFILES=''                  # no exporters
 ```
 
-**Required configuration:**
-- External PostgreSQL with backups
-- External Redis for rate limiting
-- Reverse proxy with TLS (nginx/traefik)
-- Strong authentication keys
-- Restricted CORS origins
+## Health endpoints
 
-### Offline/Air-Gapped
+| Service | Check |
+|---|---|
+| Gateway | `GET /health`; `GET /admin/system/summary` (admin) |
+| Model | `GET /admin/models/{id}/readiness` → `stopped` / `loading` / `ready` / `error` |
+| Prometheus | `GET /-/ready`, targets at `/targets` |
+| Postgres / Redis | compose healthchecks (`pg_isready`, `redis-cli ping`) |
 
-For restricted networks without internet access:
-
-```bash
-# On internet-connected machine
-make prepare-offline
-
-# Transfer cortex-offline-images/ to target
-
-# On air-gapped machine
-make load-offline
-make verify-offline
-make quick-start
-```
-
-See [Offline Deployment Guide](offline-deployment.md) for complete instructions.
-
----
-
-## Environment Profiles
-
-### Linux Profile
-Enables host metrics collection:
-```bash
-make up PROFILES=linux
-```
-
-### GPU Profile
-Enables GPU metrics (requires NVIDIA drivers):
-```bash
-make up PROFILES=gpu
-```
-
-### Combined
-```bash
-make up PROFILES=linux,gpu
-```
-
-On Linux with NVIDIA GPUs, `make up` automatically enables both profiles.
-
----
-
-## Production Checklist
-
-### Security
-- [ ] Set `GATEWAY_DEV_ALLOW_ALL_KEYS=false`
-- [ ] Configure strong `INTERNAL_VLLM_API_KEY`
-- [ ] Set specific `CORS_ALLOW_ORIGINS` (not `*`)
-- [ ] Change default admin password
-- [ ] Enable TLS via reverse proxy
-
-### Infrastructure
-- [ ] External PostgreSQL with backups
-- [ ] External Redis for rate limiting
-- [ ] Persistent volumes for models
-- [ ] Log aggregation configured
-
-### Monitoring
-- [ ] Prometheus scraping enabled
-- [ ] GPU metrics configured (DCGM exporter)
-- [ ] Alerting rules defined
-- [ ] Dashboard imported
-
-### Backup
-- [ ] Database backups automated
-- [ ] Model files backed up
-- [ ] Recovery procedure tested
-
-Run `make prod-check` to verify production readiness.
-
----
-
-## Health Endpoints
-
-| Service | Endpoint | Purpose |
-|---------|----------|---------|
-| Gateway | `GET /health` | Service health |
-| Gateway | `GET /admin/system/summary` | System metrics |
-| Prometheus | `GET /api/v1/query` | Metrics queries |
-| PostgreSQL | Container healthcheck | Database health |
-| Redis | Container healthcheck | Cache health |
-
----
-
-## Migration Workflows
-
-### Export System Configuration
-
-```bash
-# Via Admin UI: Deployment → Export
-# Or via API:
-curl -X POST http://localhost:8084/admin/deployment/export \
-  -H "Content-Type: application/json" \
-  -b cookies.txt \
-  -d '{
-    "output_dir": "/var/cortex/exports",
-    "include_images": true,
-    "include_db": true,
-    "include_configs": true
-  }'
-```
-
-### Import on New System
-
-1. Load Docker images: `make load-offline`
-2. Restore database via Admin UI or API
-3. Import models via Admin UI
-4. Verify with `make health`
-
-See [Backup & Restore](backup-restore.md) for detailed procedures.
-
----
+`make health` and `make monitoring-status` wrap these.
 
 ## Scaling
 
-### Horizontal Gateway Scaling
-- Deploy multiple gateway replicas behind load balancer
-- Share PostgreSQL and Redis instances
-- Configure sticky sessions for streaming
-
-### Model Scaling
-- Add models to the registry via Admin UI
-- Gateway routes requests to available models
-- Use health-aware routing for reliability
-
-See [Scaling & Reliability](scaling.md) for advanced patterns.
+One gateway per host is the supported topology: the gateway owns the Docker socket and the
+model containers of its host. For more capacity add hosts, each with its own Cortex, behind
+your load balancer (keys and users are per instance; export/import moves configuration). See
+[Scaling & reliability](scaling.md).

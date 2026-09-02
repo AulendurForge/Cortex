@@ -1,0 +1,17 @@
+# Offline rebuild of the gateway: reuse the dependency image shipped in a transfer bundle
+# (cortex-gateway-deps:<version>, produced by `make build-deps` on a connected host) and copy in
+# the current source. No network access is needed:
+#   make build-offline            (docker build --network none -f Dockerfile.offline ...)
+ARG DEPS_IMAGE=cortex-gateway-deps:dev
+FROM ${DEPS_IMAGE}
+WORKDIR /app
+COPY --chown=cortex:cortex src ./src
+COPY --chown=cortex:cortex alembic ./alembic
+COPY --chown=cortex:cortex alembic.ini ./alembic.ini
+COPY --chown=cortex:cortex pytest.ini conftest.py ./
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh && mkdir -p /var/cortex && chown cortex:cortex /var/cortex
+EXPOSE 8084
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:8084/health || exit 1
+ENTRYPOINT ["./entrypoint.sh"]

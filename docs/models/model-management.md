@@ -7,40 +7,55 @@
 - **Model files are never deleted by Cortex** - only database records are removed
 
 ## Lifecycle
-- Create → Start → Apply updates (stop/start) → Stop → Archive/Delete (DB only)
+Create → Dry-run → Start → (Configure → Apply: restarts only a running model) → Stop → Archive / Delete (DB only).
 
-### State Machine
+- `POST /admin/models/{id}/start` returns `{"status": "loading"}` **immediately**; the supervisor
+  tracks the startup in the background and moves the row to `running` or `failed`.
+- `POST /admin/models/{id}/apply` saves and returns `{"status": "saved"}` for a stopped model;
+  for a running one it stops and restarts the container (`restarted: true`).
+- `POST /admin/models/{id}/stop` → `stopping` → `stopped`.
+- `GET /admin/models/{id}/readiness` → `status`: `stopped` / `loading` (+ `detail`) / `ready` / `error`.
+- Model containers survive gateway restarts; the supervisor re-adopts them by label.
+- Recipes (`/admin/recipes`) are JSON snapshots (`config_json`) of a model's configuration.
+
+### Configuration semantics
+- `GET /admin/models` returns every stored configuration field, including `selected_gpus`, the six sampling
+  knobs (`temperature`, `top_p`, `top_k`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`) and
+  `custom_request_json` (the non-sampling extras stored in `request_defaults_json`). `hf_token` is never returned.
+- `PATCH /admin/models/{id}` only touches fields present in the body:
+  - an empty `hf_token` means "unchanged";
+  - an empty `custom_request_json` means "unchanged", a JSON object replaces the extras;
+  - a `null` sampling field removes it from `request_defaults_json` (engine default applies);
+  - fields belonging to the other engine are ignored;
+  - `selected_gpus` must be non-empty for GPU models (vLLM with `device=cuda`, llama.cpp with `ngl>0`), and
+    `tp_size` is derived from it when not given (`tp_size × pipeline_parallel_size` may not exceed the GPU count);
+    for llama.cpp `tensor_split` is regenerated as an equal split when its arity no longer matches.
+- `POST /admin/models/{id}/apply` returns `{"status": "saved"}` for a stopped model and restarts a running one
+  (`restarted: true`), using the same startup tracking as `/start`.
+- In the UI, leaving a numeric field empty means "use the engine default"; the placeholder shows the suggested
+  value.
+
+### State machine
 
 ```
-┌─────────┐                    ┌──────────┐                    ┌─────────┐
-│ stopped │ ─── Start Click ──→│ starting │ ─── Container Up ──→│ loading │
-└─────────┘                    └──────────┘                    └─────────┘
-     ↑                                                               │
-     │                                                               ↓
-┌──────────┐                                                   ┌─────────┐
-│ stopping │ ←────────────── Stop Click ──────────────────────│ running │
-└──────────┘                                                   └─────────┘
-     ↓                                │                              │
-     │                                ↓                              │
-┌─────────┐                      ┌────────┐                          │
-│ stopped │                      │ failed │ ←── Error at any stage ──┘
-└─────────┘                      └────────┘
+stopped ──start──► starting ──container created──► loading ──/health ok──► running
+   ▲                  │                               │                       │
+   │                  └──────── error ────────────────┴──── engine unhealthy ─┴──► failed (state_reason)
+   └──────── stop ◄── stopping ◄───────────────────────────────────────────────┘
 ```
 
-**States:**
-| State | Description |
-|-------|-------------|
-| `stopped` | No container running, ready to start |
-| `starting` | Container creation initiated |
-| `loading` | Container running, model loading into GPU memory |
-| `running` | Model ready for inference requests |
-| `stopping` | Graceful shutdown in progress |
-| `failed` | Error occurred, check logs for diagnostics |
+| State | Meaning |
+|---|---|
+| `stopped` | no container; ready to start |
+| `starting` | validating and creating the container (seconds) |
+| `loading` | container running, engine not yet answering `/health` (weights loading, graph capture) |
+| `running` | engine healthy; registered for routing |
+| `stopping` | stop in progress |
+| `failed` | see `state_reason`: `startup_timeout_after_<n>s`, `container_exited: <last log line>`, `engine_unhealthy: <detail>`, `start_failed: <error>`, `container_not_found`, or a validation message |
 
-**UI Behavior:**
-- Polling automatically updates state every few seconds
-- Toast notifications appear on state transitions
-- "Start" button triggers dry-run validation first
+`state_reason` is returned by `GET /admin/models` and shown in the UI; the supervisor keeps
+`state` in sync with the containers every `MODEL_RECONCILE_SEC` (15 s). Concurrent
+`start`/`apply` on the same model are serialised (409 `model is already loading`).
 
 ## File Safety Guarantee
 
@@ -170,11 +185,11 @@ See [GGUF Format Guide](gguf-format.md) for detailed quantization information.
 
 The dry-run endpoint validates configuration before starting:
 
-- `POST /admin/models/{id}/dry-run` returns:
-  - The vLLM or llama.cpp command that would be executed
-  - VRAM estimation and warnings
-  - Configuration validation results
-  - Quantization compatibility checks
+- `POST /admin/models/dry-run` (configuration in the body, nothing saved) and
+  `POST /admin/models/{id}/dry-run` (stored model) return:
+  - `image`, `container_name`, `command` (secrets redacted) and `env` exactly as they would be launched
+  - `issues[]` with `severity` (`error` = start would fail, `warning`), `field`, `message`
+    (invalid combinations, quantized-V-cache-without-flash-attention, GGUF-on-vLLM, VRAM concerns)
 
 **Frontend Integration:**
 When clicking "Start" in the UI, Cortex automatically runs a dry-run first. If warnings are detected (e.g., VRAM concerns, quantization mismatches), the user is prompted to confirm before proceeding.

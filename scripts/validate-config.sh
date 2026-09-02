@@ -153,24 +153,29 @@ fi
 
 echo ""
 
-# 5. Check Network Accessibility
-echo -e "${BOLD}5. Network Configuration${NC}"
+# 5. Check Listeners (gateway uses host networking, so inspect the host, not Docker port maps)
+echo -e "${BOLD}5. Network Listeners${NC}"
 echo ""
 
-# Check if ports are bound to all interfaces
-GATEWAY_PORT=$(docker ps --filter "name=cortex-gateway" --format "{{.Ports}}" 2>/dev/null | grep -oP '0\.0\.0\.0:\K\d+' | head -1)
-FRONTEND_PORT=$(docker ps --filter "name=cortex-frontend" --format "{{.Ports}}" 2>/dev/null | grep -oP '0\.0\.0\.0:\K\d+' | head -1)
-
-if [ -n "$GATEWAY_PORT" ]; then
-    test_result "Gateway Network Binding" "pass" "Bound to 0.0.0.0:$GATEWAY_PORT (accessible from network)"
+if command -v ss &> /dev/null; then
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE '(0\.0\.0\.0|\*|::):8084$'; then
+        test_result "Gateway Listener" "pass" "Listening on all interfaces :8084 (host network)"
+    elif ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ':8084$'; then
+        test_result "Gateway Listener" "warn" "Port 8084 is bound to a specific address only"
+    else
+        test_result "Gateway Listener" "fail" "Nothing listening on :8084. Run: make up"
+    fi
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ':3001$'; then
+        test_result "Frontend Listener" "pass" "Listening on :3001"
+    else
+        test_result "Frontend Listener" "fail" "Nothing listening on :3001. Run: make up"
+    fi
+    PROM_PORT_CFG=$(grep -E '^PROM_PORT=' .env 2>/dev/null | cut -d= -f2); PROM_PORT_CFG=${PROM_PORT_CFG:-9090}
+    if ss -ltnp 2>/dev/null | grep -E ":${PROM_PORT_CFG}\b" | grep -qv docker; then
+        test_result "Prometheus Port ${PROM_PORT_CFG}" "warn" "Another process (e.g. Cockpit) owns :${PROM_PORT_CFG}. Set PROM_PORT=9094 in .env"
+    fi
 else
-    test_result "Gateway Network Binding" "warn" "Could not verify binding"
-fi
-
-if [ -n "$FRONTEND_PORT" ]; then
-    test_result "Frontend Network Binding" "pass" "Bound to 0.0.0.0:$FRONTEND_PORT (accessible from network)"
-else
-    test_result "Frontend Network Binding" "warn" "Could not verify binding"
+    test_result "Network Listeners" "warn" "ss not available; skipped"
 fi
 
 echo ""

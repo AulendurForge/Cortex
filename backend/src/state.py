@@ -15,12 +15,13 @@ LB_INDEX: Dict[str, int] = {}
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 def register_model_endpoint(
-    served_name: str, 
-    url: str, 
-    task: str, 
-    engine_type: str = "vllm", 
+    served_name: str,
+    url: str,
+    task: str,
+    engine_type: str = "vllm",
     request_defaults_json: str | None = None,
     vllm_v1_enabled: bool | None = None,
+    authoritative: bool | None = None,
 ) -> None:
     """Register a model endpoint in the runtime registry.
     
@@ -37,7 +38,10 @@ def register_model_endpoint(
     # 2) Health poller discovery (best-effort): may only know url/task and should NOT wipe
     #    existing richer metadata (engine_type, request_defaults_json).
     existing = MODEL_REGISTRY.get(served_name) if served_name else None
-    is_discovery = (engine_type == "vllm" and request_defaults_json is None and vllm_v1_enabled is None)
+    if authoritative is None:
+        is_discovery = (engine_type == "vllm" and request_defaults_json is None and vllm_v1_enabled is None)
+    else:
+        is_discovery = not authoritative
 
     if isinstance(existing, dict) and is_discovery:
         # Preserve richer fields; only refresh url and fill missing task.

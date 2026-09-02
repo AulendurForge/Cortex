@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Revitalization (2026-09-02) — engine spec, supervisor, security, ops
+- **Single source of truth for model configuration**: `backend/src/engines/spec.py` defines every tunable field;
+  ORM columns, API schemas, the frontend schema/forms (`GET /admin/engines/spec`), validation and docs derive
+  from it. Engine adapters (`engines/vllm.py`, `engines/llamacpp.py`) replace the hand-written builders.
+- **Current engine flags**: vLLM v0.28 (`--cudagraph-capture-sizes`, `--enable-log-requests`, `--hf-overrides`,
+  `--speculative-config`, LoRA, tool/reasoning parsers, image entrypoint) and llama.cpp b10731
+  (`--flash-attn on|off|auto`, `--load-mode`, `--spec-draft-n-max/-min`, `--spec-type`, `--fit`, unified KV,
+  repeated `--lora`, `--api-key`). Removed obsolete flags (`--swap-space`, `--gguf-weight-format`, `VLLM_USE_V1`,
+  `--disable-log-requests`, `--draft`, `--system-prompt-file`, `--defrag-thold`, `--mlock/--no-mmap`).
+- **GGUF always runs on llama.cpp** (vLLM's GGUF loader is an out-of-tree plugin). Pinned images
+  `vllm/vllm-openai:v0.28.0` and `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` via `versions.env`.
+- **ModelSupervisor**: per-model locks, Docker calls off the event loop, background startup tracking with
+  `state_reason`, health-driven `running → failed`, reconciliation on startup and every 15 s, model containers
+  survive gateway restarts, apply restarts only running models.
+- **Security**: HMAC-signed session cookies, dev key bypass off by default, admin dependency on every `/admin`
+  router (keys/users/orgs/recipes/deployment were unauthenticated), engine ports on loopback with `--api-key`,
+  secrets redacted from dry-run output, `hf_token` never returned, forbidden custom flags / protected env vars
+  enforced on save, path traversal guards, committed API key and `.env.*` files removed from git.
+- **Alembic migrations** (`0001_baseline`, `0002_engine_spec`) run at gateway startup; recipes are JSON snapshots.
+- **Frontend**: spec-driven advanced sections, pre-submit validation, live dry-run gating, engine guidance,
+  accessible modal/tooltips/toasts, `tsc` clean, 56 unit tests.
+- **Ops**: deployable prod compose, non-root gateway, offline package with built images, Prometheus HTTP service discovery for model containers (`GET /prometheus/sd`, no Docker socket), CI workflow, regenerated engine docs, runbooks.
+- **Verified**: four-model live matrix (chat + embedding on both engines) through the full CRUD/lifecycle.
+- **Transfer bundles replace the Deployment (Beta) page**: export the exact engine image a model needs, extra
+  engine tags, infra/program images, model files and an optional database dump to a mounted drive; import on the
+  air-gapped host (load images, place files, register models) from the UI or `make load-offline BUNDLE=...`.
+  `GET/POST /admin/bundles/*`; legacy `/admin/deployment/export*`, `import-model`, `model-manifests`,
+  `estimate-size`, `options` removed (database restore kept).
+- **Offline rebuilds**: `make build-deps` produces dependency images that a program bundle ships;
+  `make build-offline` rebuilds gateway and UI from modified source with `--network none`.
+- Gateway serves Prometheus service discovery (`/prometheus/sd`) and proxies engine metrics (`/engine-metrics/{id}`); admin session cookies are accepted
+  on `/v1` so the playground works without a key; Docker start failures return 502 with the reason.
+
+- **No default credentials**: `make up`/`make quick-start` create `.env` (mode 600), generate
+  `INTERNAL_VLLM_API_KEY` and `SESSION_SECRET`, and ask for the admin username and password (typed twice, 8+
+  characters) only while they are blank; `make setup-admin` sets or resets the account on a running system
+  (`python -m src.tools.set_admin`, password over stdin) and `LOGOUT_ALL=1` signs every session out. The dev
+  compose no longer defaults to `admin/admin` or `dev-internal-token`; `make bootstrap-default` is gone.
+  Tracked `backend/.env`, `.env.linux`, `.env.windows` removed from git (they were committed with a private
+  address); docs no longer quote `admin/admin`.
+
+### Fixed
+- **Configure Model lost settings on reopen**: the model list response now returns every configuration field
+  (GPU selection, sampling defaults, custom request extras, llama.cpp speculative/startup options) and the
+  frontend schema no longer strips them, so the Configure modal shows what was saved instead of defaults.
+  Multi-GPU selections and tensor-parallel size survive a reconfigure; llama.cpp tensor splits are regenerated
+  to match the GPU count.
+- **Sampling defaults reset on every Apply**: temperature / top-p / top-k / penalties are read back from
+  `request_defaults_json`; custom request extras (`vllm_xargs`, `stop`, ...) are preserved when only sampling
+  fields change, and an empty custom JSON means "unchanged".
+- **Stored HuggingFace token wiped on Apply**: an empty `hf_token` in PATCH now means "leave unchanged".
+- **Number inputs snapping back while typing**: new `NumberField` lets you clear a field, type `0`, or type a
+  negative decimal without the default reappearing. Empty means "engine default".
+- **Apply on a stopped model** no longer tries to launch a container; it saves and reports `saved`.
+  Apply on a running model reuses the same startup tracking as Start.
+- `PATCH /admin/models/{id}` rejects an empty GPU selection for GPU models and derives `tp_size` from the
+  selected GPUs when not provided; fields belonging to the other engine are ignored.
+- `updated_at` is now maintained on model updates; `ngl=0` (CPU-only llama.cpp) is honoured instead of
+  falling back to the default layer count.
+- **First login always failed, second succeeded**: with `*` in `CORS_ALLOW_ORIGINS` the gateway answered a
+  cookie-less (first) login with `Access-Control-Allow-Origin: *` plus `Allow-Credentials: true`, which
+  browsers reject for credentialed requests even though the session cookie was stored. `*` is now translated
+  to an allow-all origin regex so the request origin is always echoed explicitly.
+- Login page disables the button while submitting and distinguishes "invalid credentials" from "gateway
+  unreachable" (shows the gateway URL to check). The user provider no longer forgets the local user on a
+  network error, only on a real 401.
+- **Gateway froze while pulling an engine image**: `start`/`apply` ran the Docker SDK (including multi-GB
+  image pulls) synchronously on the event loop, blocking every other request for the whole pull. Container
+  creation now runs in a worker thread.
+- Dry-run validation logged `cannot import name 'get_gpu_metrics'` and skipped the VRAM-vs-GPU check; the GPU
+  metrics collector is now shared between `/admin/system/gpus` and the validator.
+- `scripts/detect-ip.sh` no longer picks libvirt/VirtualBox bridge addresses (e.g. 192.168.122.1) over the
+  real LAN address; the default-route address wins ties.
+
+### Changed
+- Backend model config handling consolidated into `services/model_config.py` and
+  `services/request_defaults.py`; API schemas share one `ModelConfigFields` base. Container GPU device
+  requests come from a single `gpu_device_requests()` helper.
+- Frontend model form state lives in `modelFormValues.ts` (`buildInitialValues`, `apiItemToFormValues`,
+  `toSubmitPayload`); the unused `ModelForm` component was removed. GPU selector sorts numerically and lets
+  you add GPU slots when discovery is unavailable.
+- Models list query no longer fetches the list twice per poll.
+
+### Added
+- Backend tests: `test_model_crud_api.py` (full CRUD + start/stop/archive/delete against a live gateway),
+  `test_model_schema_parity.py` (ORM ↔ API schemas ↔ frontend zod), `test_docker_command_build.py`,
+  `test_request_defaults.py`.
+- Frontend tests (vitest): `modelFormValues.test.ts`, `NumberField.test.tsx`.
+- `docs/bug/model-config-persistence-todo.md`: full trace of the persistence and input bugs.
+
 ### Planned
 - Enhanced monitoring and alerting capabilities
 - Additional authentication providers

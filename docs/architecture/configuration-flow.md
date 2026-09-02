@@ -34,30 +34,30 @@ STEP 2: IP Detection
     ├─ Filters out Docker bridges (172.17-31.x.x)
     ├─ Filters out loopback (127.0.0.1)
     ├─ Scores remaining IPs
-    └─ Selects best: 192.168.1.181
+    └─ Selects best: 192.168.1.50
     ↓
 STEP 3: Makefile receives IP
     ↓
-    HOST_IP=192.168.1.181
+    HOST_IP=192.168.1.50
     ↓
 STEP 4: Pass to Docker Compose
     ↓
-    HOST_IP=192.168.1.181 docker compose -f docker.compose.dev.yaml up -d
+    HOST_IP=192.168.1.50 docker compose -f docker.compose.dev.yaml up -d
     ↓
 STEP 5: Docker Compose interpolation
     ↓
     CORS_ALLOW_ORIGINS: http://${HOST_IP}:3001,http://localhost:3001,...
-    Becomes: http://192.168.1.181:3001,http://localhost:3001,...
+    Becomes: http://192.168.1.50:3001,http://localhost:3001,...
     ↓
 STEP 6: Gateway container starts
     ↓
     Environment variable set:
-    CORS_ALLOW_ORIGINS=http://192.168.1.181:3001,http://localhost:3001,http://127.0.0.1:3001
+    CORS_ALLOW_ORIGINS=http://192.168.1.50:3001,http://localhost:3001,http://127.0.0.1:3001
     ↓
 STEP 7: FastAPI reads environment
     ↓
     CORS middleware configured to allow:
-    - http://192.168.1.181:3001 ✓
+    - http://192.168.1.50:3001 ✓
     - http://localhost:3001 ✓
     - http://127.0.0.1:3001 ✓
     ↓
@@ -68,17 +68,17 @@ STEP 8: Frontend container starts
     ↓
 STEP 9: User accesses frontend
     ↓
-    Browser → http://192.168.1.181:3001
+    Browser → http://192.168.1.50:3001
     ↓
 STEP 10: Frontend auto-detects gateway
     ↓
-    Frontend code: window.location.hostname = "192.168.1.181"
-    Gateway URL: http://192.168.1.181:8084
+    Frontend code: window.location.hostname = "192.168.1.50"
+    Gateway URL: http://192.168.1.50:8084
     ↓
 STEP 11: API calls work!
     ↓
-    Frontend → http://192.168.1.181:8084/v1/*
-    CORS check: Origin http://192.168.1.181:3001 ✓ Allowed!
+    Frontend → http://192.168.1.50:8084/v1/*
+    CORS check: Origin http://192.168.1.50:3001 ✓ Allowed!
     Request succeeds ✓
 ```
 
@@ -211,22 +211,22 @@ make health        # Check service health
 ```bash
 # 1. Check IP detection
 bash scripts/detect-ip.sh
-# Expected: Your LAN IP (e.g., 192.168.1.181)
+# Expected: Your LAN IP (e.g., 192.168.1.50)
 
 # 2. Check Makefile uses IP
 make -n up | grep HOST_IP
-# Expected: HOST_IP=192.168.1.181 docker compose ...
+# Expected: HOST_IP=192.168.1.50 docker compose ...
 
 # 3. Check CORS in gateway
 docker exec cortex-gateway-1 printenv CORS_ALLOW_ORIGINS
-# Expected: http://192.168.1.181:3001,http://localhost:3001,http://127.0.0.1:3001
+# Expected: http://192.168.1.50:3001,http://localhost:3001,http://127.0.0.1:3001
 
 # 4. Test gateway health
-curl http://192.168.1.181:8084/health
+curl http://192.168.1.50:8084/health
 # Expected: {"status":"ok"}
 
 # 5. Test frontend access
-curl -I http://192.168.1.181:3001/login
+curl -I http://192.168.1.50:3001/login
 # Expected: HTTP/1.1 200 OK
 ```
 
@@ -262,7 +262,7 @@ ip addr show | grep 'inet ' | grep -v '127.0.0.1'
 
 # Identify the correct one for your use case
 # Override:
-export HOST_IP=192.168.1.181  # The one you want
+export HOST_IP=192.168.1.50  # The one you want
 make restart
 ```
 
@@ -274,8 +274,8 @@ If Cortex is behind NAT with port forwarding:
 # docker.compose.dev.yaml
 # No changes needed internally!
 # Just configure your router to forward ports:
-# External:12345 → Internal:192.168.1.181:3001 (frontend)
-# External:12346 → Internal:192.168.1.181:8084 (gateway)
+# External:12345 → Internal:192.168.1.50:3001 (frontend)
+# External:12346 → Internal:192.168.1.50:8084 (gateway)
 ```
 
 Users outside your network access:
@@ -359,8 +359,8 @@ Users outside your network access:
 ```bash
 # Admin has to:
 1. Find their IP: ifconfig
-2. Edit docker.compose.yaml: CORS_ALLOW_ORIGINS=http://192.168.1.181:3001
-3. Edit frontend config: NEXT_PUBLIC_GATEWAY_URL=http://192.168.1.181:8084
+2. Edit docker.compose.yaml: CORS_ALLOW_ORIGINS=http://192.168.1.50:3001
+3. Edit frontend config: NEXT_PUBLIC_GATEWAY_URL=http://192.168.1.50:8084
 4. Restart containers
 5. IP changes? Repeat all steps!
 ```
@@ -407,7 +407,7 @@ make validate
 
 # 4. If still broken, check Docker Compose received IP
 make -n up | grep HOST_IP
-# Expected: HOST_IP=192.168.1.181 docker compose ...
+# Expected: HOST_IP=192.168.1.50 docker compose ...
 ```
 
 ### If IP Detection Fails
@@ -422,7 +422,7 @@ ip addr show
 # Look for your LAN interface (usually starts with 192.168 or 10.x)
 
 # 3. Manual override
-export HOST_IP=192.168.1.181
+export HOST_IP=192.168.1.50
 make restart
 make validate
 ```

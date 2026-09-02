@@ -209,8 +209,8 @@ def estimate_llamacpp_vram_usage(m: Model, gpu_count: int = 1) -> Dict[str, Any]
     
     # KV cache estimation
     # Formula: context_size × parallel_slots × layers × head_dim × 2 (K+V) × bytes_per_elem
-    context_size = getattr(m, 'context_size', None) or settings.LLAMACPP_DEFAULT_CONTEXT
-    parallel_slots = getattr(m, 'parallel_slots', None) or settings.LLAMACPP_MAX_PARALLEL
+    context_size = getattr(m, 'context_size', None) or 4096
+    parallel_slots = getattr(m, 'parallel_slots', None) or 4
     
     # Head dimension is typically embedding_size / num_heads, but we approximate
     # KV cache per token ≈ 2 × layers × head_dim × kv_heads × bytes_per_elem
@@ -219,8 +219,8 @@ def estimate_llamacpp_vram_usage(m: Model, gpu_count: int = 1) -> Dict[str, Any]
     kv_heads = max(1, num_layers // 4)  # Conservative GQA estimate
     
     # Get cache type multipliers
-    cache_type_k = (getattr(m, 'cache_type_k', None) or settings.LLAMACPP_CACHE_TYPE_K).lower()
-    cache_type_v = (getattr(m, 'cache_type_v', None) or settings.LLAMACPP_CACHE_TYPE_V).lower()
+    cache_type_k = (getattr(m, 'cache_type_k', None) or 'f16').lower()
+    cache_type_v = (getattr(m, 'cache_type_v', None) or 'f16').lower()
     
     bytes_per_k = KV_CACHE_MULTIPLIERS.get(cache_type_k, 2.0)
     bytes_per_v = KV_CACHE_MULTIPLIERS.get(cache_type_v, 2.0)
@@ -238,7 +238,7 @@ def estimate_llamacpp_vram_usage(m: Model, gpu_count: int = 1) -> Dict[str, Any]
     kv_cache_gb = kv_cache_bytes / (1024 ** 3)
     
     # GPU split if using multiple GPUs
-    ngl = getattr(m, 'ngl', None) or settings.LLAMACPP_DEFAULT_NGL
+    ngl = getattr(m, 'ngl', None) if getattr(m, 'ngl', None) is not None else 999
     if ngl == 0:
         # CPU only mode - no VRAM needed for model
         model_weights_gb = 0.0
@@ -280,286 +280,75 @@ def estimate_llamacpp_vram_usage(m: Model, gpu_count: int = 1) -> Dict[str, Any]
     }
 
 
-def validate_model_config(m: Model, available_gpus: List[Dict] = None) -> List[ValidationWarning]:
-    """Validate model configuration and return warnings.
-    
-    Catches common issues:
-    - VRAM insufficient
-    - Custom args conflicts
-    - GPU count mismatches
-    
-    Args:
-        m: Model to validate
-        available_gpus: List of GPU info dicts with mem_total_mb, mem_used_mb
-        
-    Returns:
-        List of validation warnings
+async def validate_model_config(m: Model) -> DryRunResult:
+    """VRAM estimate against the GPUs the model will use, plus a few sanity checks.
+
+    Engine-specific flag validation lives in the engine adapters; this covers
+    what needs live hardware data.
     """
-    warnings = []
-    
-    # Determine engine type for proper validation
-    engine_type = getattr(m, 'engine_type', 'vllm')
-    
-    # 1. VRAM Validation (Gap #5: Use engine-specific estimation)
+    import json
+    warnings: List[ValidationWarning] = []
+    engine_type = getattr(m, "engine_type", None) or "vllm"
+
+    available_gpus: List[Dict[str, Any]] = []
     try:
-        if engine_type == 'llamacpp':
-            # Use llama.cpp-specific VRAM estimation
-            gpu_count = 1
-            selected_gpus = getattr(m, 'selected_gpus', None)
-            if selected_gpus:
-                try:
-                    import json
-                    gpu_list = json.loads(selected_gpus) if isinstance(selected_gpus, str) else selected_gpus
-                    gpu_count = len(gpu_list) if gpu_list else 1
-                except Exception:
-                    pass
+        from .system_monitoring import get_gpu_metrics
+        gpus = await get_gpu_metrics(None)
+        available_gpus = [
+            {"index": g.index, "mem_total_mb": g.mem_total_mb, "mem_used_mb": g.mem_used_mb}
+            for g in gpus if g.mem_total_mb
+        ]
+    except Exception as e:  # pragma: no cover - environment specific
+        logger.info("GPU info unavailable for dry-run: %s", e)
+
+    try:
+        selected = getattr(m, "selected_gpus", None)
+        gpu_list = json.loads(selected) if isinstance(selected, str) else (selected or [])
+    except Exception:
+        gpu_list = []
+    gpu_count = max(1, len(gpu_list))
+
+    vram_est: Optional[Dict[str, Any]] = None
+    try:
+        if engine_type == "llamacpp":
             vram_est = estimate_llamacpp_vram_usage(m, gpu_count)
-            fix_suggestion = 'Reduce Context Size, Parallel Slots, or use more aggressive KV cache quantization (q4_0)'
+            fix = "Reduce context size / parallel slots, or use a quantized KV cache (q8_0 with flash attention)"
         else:
             vram_est = estimate_vram_usage(m, m.tp_size or 1)
-            fix_suggestion = 'Reduce GPU Memory Utilization, Max Context Length, or enable KV cache quantization (--kv-cache-dtype fp8)'
-        
-        required_gb = vram_est["required_vram_gb"]
-        
-        if available_gpus:
-            gpu_count_to_check = m.tp_size or 1 if engine_type != 'llamacpp' else min(len(available_gpus), gpu_count)
-            for i, gpu in enumerate(available_gpus[:gpu_count_to_check]):
-                total_gb = (gpu.get('mem_total_mb') or 0) / 1024
-                used_gb = (gpu.get('mem_used_mb') or 0) / 1024
-                free_gb = total_gb - used_gb
-                
-                if required_gb > free_gb:
-                    warnings.append(ValidationWarning(
-                        severity='error',
-                        category='memory',
-                        title=f'Insufficient VRAM on GPU {i}',
-                        message=f'Estimated need: {required_gb:.1f} GB, Available: {free_gb:.1f} GB',
-                        fix=fix_suggestion
-                    ))
-                elif required_gb > free_gb * 0.9:
-                    warnings.append(ValidationWarning(
-                        severity='warning',
-                        category='memory',
-                        title=f'Tight VRAM on GPU {i}',
-                        message=f'Estimated need: {required_gb:.1f} GB, Available: {free_gb:.1f} GB (little headroom)',
-                        fix='Consider reducing settings slightly for safety margin'
-                    ))
+            fix = "Reduce gpu_memory_utilization or max_model_len, or use --kv-cache-dtype fp8"
+        required_gb = float(vram_est["required_vram_gb"])
+        targets = [g for g in available_gpus if not gpu_list or g["index"] in gpu_list] or available_gpus[:gpu_count]
+        for g in targets:
+            total_gb = (g.get("mem_total_mb") or 0) / 1024
+            free_gb = total_gb - (g.get("mem_used_mb") or 0) / 1024
+            if required_gb > free_gb:
+                warnings.append(ValidationWarning(severity="error", category="memory", title=f"Insufficient VRAM on GPU {g['index']}",
+                                                  message=f"Estimated need: {required_gb:.1f} GB, free: {free_gb:.1f} GB", fix=fix))
+            elif required_gb > free_gb * 0.9:
+                warnings.append(ValidationWarning(severity="warning", category="memory", title=f"Tight VRAM on GPU {g['index']}",
+                                                  message=f"Estimated need: {required_gb:.1f} GB, free: {free_gb:.1f} GB (little headroom)",
+                                                  fix="Leave some headroom for the KV cache"))
     except Exception as e:
-        logger.warning(f"VRAM estimation failed: {e}")
-    
-    # 2. Custom Args Validation (Gap #9: Enhanced with llama.cpp flag validation)
-    try:
-        from ..utils import validate_custom_startup_args, FORBIDDEN_CUSTOM_ARGS, REQUEST_TIME_PARAMS
-        import json
-        
-        custom_args_json = getattr(m, 'engine_startup_args_json', None)
-        if custom_args_json:
-            custom_args = json.loads(custom_args_json)
-            
-            # Use enhanced validation with engine-specific checks
-            try:
-                arg_warnings = validate_custom_startup_args(custom_args, engine_type)
-                for w in arg_warnings:
-                    severity = w.get('severity', 'info')
-                    message = w.get('message', '')
-                    suggestion = w.get('suggestion')
-                    fix = f"Did you mean '{suggestion}'?" if suggestion else None
-                    
-                    warnings.append(ValidationWarning(
-                        severity=severity,
-                        category='args',
-                        title='Custom Argument Warning' if severity == 'warning' else 'Unknown Flag',
-                        message=message,
-                        fix=fix
-                    ))
-            except Exception as e:
-                # If validation raises (forbidden arg), convert to warning
-                warnings.append(ValidationWarning(
-                    severity='error',
-                    category='args',
-                    title='Forbidden Argument',
-                    message=str(e.detail if hasattr(e, 'detail') else e),
-                    fix='Remove this argument from Custom Startup Arguments'
-                ))
-    except Exception as e:
-        logger.warning(f"Custom args validation failed: {e}")
-    
-    # 3. GPU Count vs Tensor Parallel
-    tp_size = m.tp_size or 1
-    if available_gpus and tp_size > len(available_gpus):
-        warnings.append(ValidationWarning(
-            severity='error',
-            category='config',
-            title='GPU Count Mismatch',
-            message=f'Tensor parallel size ({tp_size}) exceeds available GPUs ({len(available_gpus)})',
-            fix=f'Reduce GPU selection to {len(available_gpus)} or fewer'
-        ))
-    
-    # 4. Max Model Len Sanity Check
-    max_len = m.max_model_len or 0
+        logger.info("VRAM estimation skipped: %s", e)
+
+    if available_gpus and gpu_list:
+        missing = [g for g in gpu_list if g not in {a["index"] for a in available_gpus}]
+        if missing:
+            warnings.append(ValidationWarning(severity="error", category="config", title="Unknown GPU selected",
+                                              message=f"GPU index(es) {missing} were not reported by the host", fix="Re-select GPUs"))
+
+    max_len = getattr(m, "max_model_len", None) or 0
     if max_len > 131072:
-        warnings.append(ValidationWarning(
-            severity='warning',
-            category='config',
-            title='Very Large Context',
-            message=f'Max context length ({max_len}) is extremely large and may cause OOM',
-            fix='Consider reducing to 32K-64K unless you specifically need larger context'
-        ))
-    
-    # 5. Quantization Validation (Gap #14)
-    quant = (m.quantization or '').lower()
-    model_path = (m.local_path or m.repo_id or m.name or '').lower()
-    
-    if quant == 'awq':
-        # AWQ requires pre-quantized weights
-        if 'awq' not in model_path:
-            warnings.append(ValidationWarning(
-                severity='warning',
-                category='config',
-                title='AWQ Quantization Mismatch',
-                message='AWQ quantization selected but model name/path does not indicate AWQ weights',
-                fix='AWQ requires a model pre-quantized with AWQ (e.g., "TheBloke/...-AWQ"). Using AWQ with non-AWQ weights will fail.'
-            ))
-    elif quant == 'gptq':
-        # GPTQ requires pre-quantized weights
-        if 'gptq' not in model_path:
-            warnings.append(ValidationWarning(
-                severity='warning',
-                category='config',
-                title='GPTQ Quantization Mismatch',
-                message='GPTQ quantization selected but model name/path does not indicate GPTQ weights',
-                fix='GPTQ requires a model pre-quantized with GPTQ (e.g., "TheBloke/...-GPTQ"). Using GPTQ with non-GPTQ weights will fail.'
-            ))
-    elif quant == 'fp8':
-        # FP8 requires Hopper/Ada GPU (SM 8.9+)
-        warnings.append(ValidationWarning(
-            severity='info',
-            category='config',
-            title='FP8 Quantization Note',
-            message='FP8 quantization requires Hopper (H100) or Ada (RTX 40xx) GPU with SM 8.9+',
-            fix='FP8 will work on any model but may fail on older GPUs. If startup fails, try INT8 instead.'
-        ))
-    elif quant == 'int8':
-        # INT8 is generally compatible
-        warnings.append(ValidationWarning(
-            severity='info',
-            category='config',
-            title='INT8 Quantization',
-            message='INT8 W8A8 quantization selected - provides ~2x memory savings',
-            fix=None
-        ))
-    
-    return warnings
-
-
-async def dry_run_validation(model_id: int) -> DryRunResult:
-    """Run dry-run validation for a model.
-    
-    Checks VRAM, custom args, and config without starting container.
-    
-    Args:
-        model_id: Model ID to validate
-        
-    Returns:
-        DryRunResult with warnings and estimates
-    """
-    try:
-        from ..main import SessionLocal
-        from sqlalchemy import select
-        from ..docker_manager import _build_command, _build_llamacpp_command
-        
-        if SessionLocal is None:
-            return DryRunResult(
-                valid=False,
-                warnings=[ValidationWarning(
-                    severity='error',
-                    category='config',
-                    title='Database Unavailable',
-                    message='Cannot validate config - database not ready',
-                )],
-            )
-        
-        async with SessionLocal() as session:
-            res = await session.execute(select(Model).where(Model.id == model_id))
-            m = res.scalar_one_or_none()
-            
-            if not m:
-                return DryRunResult(
-                    valid=False,
-                    warnings=[ValidationWarning(
-                        severity='error',
-                        category='config',
-                        title='Model Not Found',
-                        message=f'Model ID {model_id} not found',
-                    )],
-                )
-            
-            # Get available GPUs
-            available_gpus = []
-            try:
-                from ..services.system_monitoring import get_gpu_metrics
-                from ..config import get_settings
-                gpus = await get_gpu_metrics(get_settings())
-                available_gpus = [
-                    {'mem_total_mb': g.mem_total_mb, 'mem_used_mb': g.mem_used_mb}
-                    for g in gpus if g.mem_total_mb
-                ]
-            except Exception as e:
-                logger.warning(f"Could not fetch GPU info: {e}")
-            
-            # Run validations
-            warnings = validate_model_config(m, available_gpus)
-            
-            # Get VRAM estimate (Gap #5: Use engine-specific estimation)
-            vram_estimate = None
-            try:
-                engine_type = getattr(m, 'engine_type', 'vllm')
-                if engine_type == 'llamacpp':
-                    # Calculate GPU count from selected_gpus
-                    gpu_count = 1
-                    selected_gpus = getattr(m, 'selected_gpus', None)
-                    if selected_gpus:
-                        try:
-                            import json
-                            gpu_list = json.loads(selected_gpus) if isinstance(selected_gpus, str) else selected_gpus
-                            gpu_count = len(gpu_list) if gpu_list else 1
-                        except Exception:
-                            pass
-                    vram_estimate = estimate_llamacpp_vram_usage(m, gpu_count)
-                else:
-                    vram_estimate = estimate_vram_usage(m, m.tp_size or 1)
-            except Exception as e:
-                logger.warning(f"VRAM estimation failed: {e}")
-            
-            # Generate command preview
-            command_preview = None
-            try:
-                if m.engine_type == 'llamacpp':
-                    command_preview = _build_llamacpp_command(m)
-                else:
-                    command_preview = _build_command(m)
-            except Exception as e:
-                logger.warning(f"Command preview failed: {e}")
-            
-            # Determine overall validity (no errors, only warnings/info allowed)
-            has_errors = any(w.severity == 'error' for w in warnings)
-            
-            return DryRunResult(
-                valid=not has_errors,
-                warnings=warnings,
-                vram_estimate=vram_estimate,
-                command_preview=command_preview,
-            )
-            
-    except Exception as e:
-        logger.error(f"Dry-run validation failed: {e}")
-        return DryRunResult(
-            valid=False,
-            warnings=[ValidationWarning(
-                severity='error',
-                category='config',
-                title='Validation Failed',
-                message=str(e),
-            )],
-        )
-
+        warnings.append(ValidationWarning(severity="warning", category="config", title="Very large context",
+                                          message=f"max_model_len {max_len} may exhaust VRAM", fix="32K-64K is typical"))
+    quant = (getattr(m, "quantization", None) or "").lower()
+    model_path = (m.local_path or m.repo_id or m.name or "").lower()
+    if quant in ("awq", "awq_marlin") and "awq" not in model_path:
+        warnings.append(ValidationWarning(severity="warning", category="config", title="AWQ quantization mismatch",
+                                          message="AWQ selected but the model name/path does not indicate AWQ weights",
+                                          fix="AWQ needs a pre-quantized checkpoint"))
+    if quant in ("gptq", "gptq_marlin") and "gptq" not in model_path:
+        warnings.append(ValidationWarning(severity="warning", category="config", title="GPTQ quantization mismatch",
+                                          message="GPTQ selected but the model name/path does not indicate GPTQ weights",
+                                          fix="GPTQ needs a pre-quantized checkpoint"))
+    return DryRunResult(valid=not any(w.severity == "error" for w in warnings), warnings=warnings, vram_estimate=vram_est)

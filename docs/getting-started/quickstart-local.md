@@ -4,13 +4,13 @@ For contributors who prefer running services directly.
 
 ## Prerequisites
 - Python 3.11+
-- Node.js 18+
-- Postgres 14+ and Redis 5+ (or containers)
+- Node.js 22+
+- Postgres 16 and Redis 7 (or containers)
 
 ## Start Postgres and Redis (containers)
 ```bash
 # Postgres
-docker run -d --name cortex-pg -e POSTGRES_USER=cortex -e POSTGRES_PASSWORD=cortex -e POSTGRES_DB=cortex -p 5432:5432 postgres:14
+docker run -d --name cortex-pg -e POSTGRES_USER=cortex -e POSTGRES_PASSWORD=cortex -e POSTGRES_DB=cortex -p 5432:5432 postgres:16
 # Redis
 docker run -d --name cortex-redis -p 6379:6379 redis:7
 ```

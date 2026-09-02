@@ -198,7 +198,7 @@ export default function WelcomeToCortex() {
           <NavCard href="/chat" icon="💬" title="Chat" description="Test models directly" />
           <NavCard href="/keys" icon="🔑" title="API Keys" description="Manage access tokens" />
           <NavCard href="/usage" icon="📊" title="Usage" description="Analytics & metrics" />
-          <NavCard href="/deployment" icon="📦" title="Deployment" description="Export & migrate" />
+          <NavCard href="/deployment" icon="📦" title="Transfer" description="Export & import bundles" />
         </div>
       </section>
 

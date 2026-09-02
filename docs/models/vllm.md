@@ -1,953 +1,305 @@
 # vLLM Engine Guide
 
-## Overview
+vLLM serves HuggingFace-format checkpoints (safetensors, and quantized variants such as AWQ,
+GPTQ, FP8, NVFP4/ModelOpt) with PagedAttention and continuous batching. It is the engine for
+GPU-resident transformer models; GGUF files are always served by [llama.cpp](llamaCPP.md).
 
-vLLM (Very Large Language Model) is Cortex's primary inference engine for serving transformer-based models from Hugging Face. It provides state-of-the-art throughput and memory efficiency through innovative techniques like PagedAttention.
-
-**When to use vLLM:**
-- ✅ Hugging Face Transformers models (SafeTensors, PyTorch)
-- ✅ Architectures: Llama, Mistral, Qwen, Phi, GPT-NeoX, Falcon, and 100+ others
-- ✅ Need maximum throughput and efficiency
-- ✅ Multi-GPU tensor parallelism required
-- ✅ Standard model architectures with HF support
-
-**When NOT to use vLLM:**
-- ❌ Custom/experimental architectures (e.g., Harmony/GPT-OSS)
-- ❌ GGUF-only quantized models
-- ❌ Models requiring `trust_remote_code` with unsupported architectures
-- ❌ CPU-only inference (llama.cpp is better)
-
-## System Requirements
-
-### GPU Requirements
-
-- **Compute Capability**: 7.0 or higher
-  - Supported GPUs: V100, T4, RTX 20xx/30xx/40xx series, A100, L4, H100, etc.
-  - Check your GPU: `nvidia-smi` (look for compute capability in GPU details)
-
-### NVIDIA Driver Requirements
-
-vLLM Docker images are built with specific CUDA versions that require compatible NVIDIA drivers:
-
-- **CUDA 12.9+ (latest images)**: Requires NVIDIA driver **575.51.03** or newer (Linux) / **576.02** or newer (Windows)
-- **CUDA 12.8**: Requires NVIDIA driver **525.60.13** or newer (Linux) / **528.33** or newer (Windows)
-
-**Common Issue**: If containers fail to start with errors like `nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9`, you need to update your NVIDIA drivers.
-
-**See**: [Updating NVIDIA Drivers](../operations/UPDATE_NVIDIA_DRIVERS.md) for detailed instructions.
-
-### Verifying Compatibility
-
-```bash
-# Check driver version
-nvidia-smi --query-gpu=driver_version --format=csv,noheader
-
-# Check maximum CUDA version supported
-nvidia-smi --query-gpu=cuda_version --format=csv,noheader
-
-# Test GPU access in Docker (should work without errors)
-docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu22.04 nvidia-smi
-```
+Pinned image: **`vllm/vllm-openai:v0.28.0`** (`VLLM_IMAGE` in `versions.env` and
+`backend/src/config.py`). The image is CUDA 13 based and needs **NVIDIA driver >= 580** on
+the host. Hosts on the 550-579 driver series must use the CUDA 12.9 build
+`vllm/vllm-openai:v0.28.0-cu129`, either globally (`VLLM_IMAGE=...` in `.env`) or per model
+through the `engine_image` field. See [Engine images and driver compatibility](#engine-images-and-driver-compatibility).
 
 ---
 
-## Core Technologies
+## How Cortex runs vLLM
 
-### 1. PagedAttention
+Every model record is turned into one container by the vLLM adapter
+(`backend/src/engines/vllm.py`), driven by the declarative field table in
+`backend/src/engines/spec.py`. The same table generates the API schema, the UI form and the
+tables below, so a field that appears here is exactly what reaches the container.
 
-vLLM's breakthrough innovation that enables efficient KV cache management:
-
-**Traditional Attention Problem:**
-- KV cache allocated contiguously for max sequence length
-- Most tokens unused → wasted VRAM
-- 60-80% of VRAM wasted on padding
-
-**PagedAttention Solution:**
-- KV cache split into fixed-size blocks (typically 16 tokens)
-- Blocks allocated on-demand (like OS virtual memory)
-- Near-zero waste, 2-4x higher throughput
-- Enables longer contexts and larger batch sizes
-
-**Cortex Implementation:**
-```python
-# Configured via --block-size flag
-# Default: 16 tokens per block
-# Adjustable via Model Form: 1, 8, 16, 32
+```
+docker run --name vllm-model-<id> \
+  --label cortex.managed=1 --label cortex.model_id=<id> --label cortex.engine=vllm \
+  --network cortex_default -p 127.0.0.1::8000 --ipc host --runtime nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=<selected_gpus> -e HF_HUB_OFFLINE=1 (offline mode) \
+  -v /var/cortex/models:/models:ro -v /var/cortex/hf-cache:/root/.cache/huggingface \
+  vllm/vllm-openai:v0.28.0 \
+  --model /models/<local_path>  --served-model-name <name> --host 0.0.0.0 --port 8000 \
+  --api-key $INTERNAL_VLLM_API_KEY  <fields below>  <custom args>
 ```
 
-### 2. Continuous Batching
+Points that matter operationally:
 
-Processes requests as they arrive, without waiting for batch to fill:
+- **Ports are published on `127.0.0.1` only.** LAN clients cannot reach the engine; they go
+  through the gateway, which authenticates with `INTERNAL_VLLM_API_KEY` (`--api-key`).
+- **The image entrypoint is `vllm serve`**; the `--model` positional/flag, `--served-model-name`,
+  `--host`, `--port` and `--api-key` are managed by Cortex and rejected in custom args
+  (`custom_arg_forbidden`). `entrypoint_override` replaces the command prefix for exotic images.
+- **Model source**: HF repo id (downloaded into the HF cache; `hf_token` is passed as
+  `HF_TOKEN` and never returned by the API) or a folder under `CORTEX_MODELS_DIR`
+  (`local_path`, mounted read-only at `/models`).
+- **GPU placement** comes from `selected_gpus`; `tp_size` defaults to its length and
+  `tp_size x pipeline_parallel_size` must not exceed it. Empty `selected_gpus` means
+  `device=cpu`.
+- **Dry-run** (`POST /admin/models/dry-run` with a body, or `POST /admin/models/{id}/dry-run`)
+  renders the command with secrets redacted and reports `issues[]` with severities.
 
-**Benefits:**
-- Lower latency (no waiting for batch)
-- Higher throughput (always working)
-- Better GPU utilization
+### GGUF under vLLM
 
-**Cortex Controls:**
-- `max_num_seqs`: Maximum concurrent sequences (default: 256)
-- `max_num_batched_tokens`: Total tokens per batch (default: 2048)
-
-### 3. Tensor Parallelism (TP)
-
-Splits model weights/computation across multiple GPUs:
-
-**How it works:**
-```
-Single GPU:     [Model] → GPU 0 (OOM if model too large)
-
-TP=2:           [Model] 
-                ├─ Half → GPU 0
-                └─ Half → GPU 1
-
-TP=4:           [Model]
-                ├─ Quarter → GPU 0
-                ├─ Quarter → GPU 1
-                ├─ Quarter → GPU 2
-                └─ Quarter → GPU 3
-```
-
-**Use Cases:**
-- Model too large for single GPU
-- Need more KV cache space
-- Want faster inference (up to TP=4-8, diminishing returns after)
-
-**Cortex Configuration:**
-- Set via `TP Size` slider in Model Form
-- Must be ≤ number of available GPUs
-- Works with Llama 3.3 70B across 4x L40S GPUs
-
-### 4. Pipeline Parallelism (PP)
-
-Splits model layers across devices/nodes:
-
-**When to use:**
-- Extremely large models (70B+, 175B+)
-- Model doesn't fit even with TP
-- Multi-node deployments
-
-**How it works:**
-```
-PP=2:
-Node 1: Layers 1-40   (GPU 0-3 with TP=4)
-Node 2: Layers 41-80  (GPU 4-7 with TP=4)
-```
-
-**Cortex Support:**
-- Available in Advanced settings
-- `pipeline_parallel_size` configurable
-- Adds inter-stage latency (use sparingly)
+vLLM's GGUF loader is an out-of-tree plugin in v0.28 and is not shipped in the pinned image.
+Cortex therefore **routes every `.gguf` model to llama.cpp**; selecting `engine_type=vllm` for a
+GGUF path fails validation with `GGUF models must use the llama.cpp engine`. If you have a
+custom vLLM image with the GGUF plugin installed you can set it as `engine_image` and pass the
+tokenizer with `tokenizer`, but this is unsupported.
 
 ---
 
-## Supported Quantization
+## Configuration fields
 
-### Runtime Quantization (vLLM built-in):
+Fields marked *Cortex-internal* are consumed by the gateway (placement, image, timeouts) and
+never become flags. "Engine default" means Cortex does not emit the flag unless you set the
+field; the value vLLM then uses is documented in the vLLM CLI reference.
 
-| Method | Size Reduction | Quality | VRAM Savings | Use Case |
-|--------|---------------|---------|--------------|----------|
-| **FP16/BF16** | Baseline | Best | 0% | Default |
-| **FP8** | 2x | Very Good | ~50% | Newer GPUs (H100, L40S) |
-| **INT8** | 2x | Good | ~50% | Wider GPU support |
-| **AWQ (4-bit)** | 4x | Good | ~75% | Pre-quantized models |
-| **GPTQ (4-bit)** | 4x | Good | ~75% | Pre-quantized models |
+The tables are generated from `backend/src/engines/spec.py` by
+`python3 scripts/gen-engine-flag-tables.py`; do not edit them by hand.
 
-**Notes:**
-- AWQ/GPTQ require pre-quantized model checkpoints
-- FP8 requires Ada Lovelace or Hopper architecture
-- INT8 works on most NVIDIA GPUs
+### Common fields (both engines)
 
-### KV Cache Quantization:
+<!-- BEGIN GENERATED: common -->
 
-Separate from weight quantization, reduces KV cache memory:
+#### Engine image & startup
 
-```python
-# Default: Same as model dtype (FP16/BF16)
-kv_cache_dtype: "auto"
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `engine_image` | (Cortex-internal, not a flag) | Engine image. Docker image override. Leave blank for the pinned system default. | engine default |  |
+| `engine_version` | (Cortex-internal, not a flag) | Engine version (reference) | engine default |  |
+| `engine_digest` | (Cortex-internal, not a flag) | Engine image digest | engine default |  |
+| `startup_timeout_sec` | (Cortex-internal, not a flag) | Startup timeout (s). How long the model may take to become ready before it is marked failed. | engine default | (min 30) |
 
-# FP8 variants (50% KV cache reduction):
-kv_cache_dtype: "fp8"          # Generic FP8
-kv_cache_dtype: "fp8_e4m3"     # 4-bit exponent, 3-bit mantissa
-kv_cache_dtype: "fp8_e5m2"     # 5-bit exponent, 2-bit mantissa
-```
+#### GPU placement & parallelism
 
-**Recommendation**: Use `fp8` for KV cache on L40S GPUs (minimal quality loss)
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `selected_gpus` | (Cortex-internal, not a flag) | GPUs. GPU indices exposed to the container. Empty = CPU mode (vLLM device=cpu, llama.cpp ngl=0). | engine default |  |
 
----
+#### Model behaviour
 
-## Cortex vLLM Implementation
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `seed` | `--seed VALUE` | Seed. Random seed for sampling reproducibility. | engine default |  |
+| `chat_template` | `--chat-template VALUE` | Chat template (inline, preset name or file under the models dir) | engine default |  |
 
-### Container Architecture
+#### Custom args & environment
 
-```
-Host Machine
-├─ Docker Network: cortex_default
-└─ vLLM Container: vllm-model-{id}
-   ├─ Image: vllm/vllm-openai:latest (or pinned version)
-   ├─ Port: 8000 (internal) → Ephemeral host port
-   ├─ Network: Service-to-service via container name
-   ├─ Volumes:
-   │  ├─ /models (RO) → Host models directory
-   │  └─ /root/.cache/huggingface → HF cache
-   ├─ Environment:
-   │  ├─ CUDA_VISIBLE_DEVICES=all
-   │  ├─ NCCL_* (multi-GPU config)
-   │  ├─ HF_HUB_TOKEN (for gated models)
-   │  ├─ VLLM_USE_V1 (if V1 engine enabled)
-   │  ├─ VLLM_ENGINE_ITERATION_TIMEOUT_S (request timeout)
-   │  └─ VLLM_LOGGING_LEVEL (if debug enabled)
-   └─ Resources:
-      ├─ GPU: All available (via DeviceRequest)
-      ├─ SHM: 2GB
-      └─ IPC: host mode
-```
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `engine_startup_args_json` | (Cortex-internal, not a flag) | Custom startup args | engine default |  |
+| `engine_startup_env_json` | (Cortex-internal, not a flag) | Custom environment variables | engine default |  |
 
-### Version-Aware Entrypoint
+#### Request defaults
 
-Cortex automatically selects the correct entrypoint based on vLLM version:
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `request_defaults_json` | (Cortex-internal, not a flag) | Request defaults | engine default |  |
+| `request_timeout_sec` | (Cortex-internal, not a flag) | Request timeout (s) | engine default | (min 1) |
+| `stream_timeout_sec` | (Cortex-internal, not a flag) | Stream timeout (s) | engine default | (min 1) |
+<!-- END GENERATED -->
 
-- **vLLM ≥ 0.4.0**: Uses `vllm serve` command
-- **vLLM < 0.4.0**: Uses `python3 -m vllm.entrypoints.openai.api_server`
+### vLLM fields
 
-You can also override the entrypoint manually via the `entrypoint_override` field in the Model Form for custom deployment scenarios.
+<!-- BEGIN GENERATED: vllm -->
 
-### Startup Command Example
+#### Engine image & startup
 
-For a Llama 3 8B model with TP=2:
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `entrypoint_override` | (Cortex-internal, not a flag) | Entrypoint override. Comma-separated command prefix. Leave blank to use the image entrypoint (vllm serve). | engine default |  |
 
-```bash
-# Container command (built by _build_command()):
---model meta-llama/Meta-Llama-3-8B-Instruct
---host 0.0.0.0
---port 8000
---served-model-name llama-3-8b-instruct
---dtype auto
---tensor-parallel-size 2
---gpu-memory-utilization 0.9
---max-model-len 8192
---max-num-batched-tokens 2048
---kv-cache-dtype auto
---block-size 16
---enforce-eager
---api-key dev-internal-token
-```
+#### Model source & tokenizer
 
-### Model Sources
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `tokenizer` | `--tokenizer VALUE` | Tokenizer (HF repo or path) | engine default |  |
+| `hf_config_path` | `--hf-config-path VALUE` | HF config path | engine default |  |
+| `tokenizer_mode` | `--tokenizer-mode VALUE` | Tokenizer mode | engine default | `auto`, `hf`, `slow`, `mistral` |
+| `load_format` | `--load-format VALUE` | Load format | engine default | `auto`, `safetensors`, `pt`, `npcache`, `tensorizer`, `fastsafetensors`, `runai_streamer` |
+| `trust_remote_code` | `--trust-remote-code` | Trust remote code | engine default |  |
 
-**Online Mode** (HuggingFace):
-```python
-repo_id: "meta-llama/Meta-Llama-3-8B-Instruct"
-local_path: None
+#### GPU placement & parallelism
 
-# vLLM downloads to HF cache:
-# /root/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct
-```
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `device` | (Cortex-internal, not a flag) | Device | `cuda` | `cuda`, `cpu` |
+| `tp_size` | `--tensor-parallel-size VALUE` | Tensor parallel size Emitted only when > 1. | engine default | (min 1) |
+| `pipeline_parallel_size` | `--pipeline-parallel-size VALUE` | Pipeline parallel size Emitted only when > 1. | engine default | (min 1) |
+| `data_parallel_size` | `--data-parallel-size VALUE` | Data parallel size Emitted only when > 1. | engine default | (min 1) |
+| `enable_expert_parallel` | `--enable-expert-parallel` | Expert parallel (MoE) | engine default |  |
+| `distributed_executor_backend` | `--distributed-executor-backend VALUE` | Distributed executor | engine default | `mp`, `ray`, `uni`, `external_launcher` |
 
-**Offline Mode** (Local Files):
-```python
-repo_id: None
-local_path: "llama-3-8b-instruct"  # Relative to CORTEX_MODELS_DIR
+#### Memory & KV cache
 
-# vLLM reads from:
-# /models/llama-3-8b-instruct/
-```
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `dtype` | `--dtype VALUE` | DType | `auto` | `auto`, `float16`, `bfloat16`, `float32` |
+| `gpu_memory_utilization` | `--gpu-memory-utilization VALUE` | GPU memory utilization | `0.92` | (min 0.05, max 0.99) |
+| `kv_cache_memory_bytes` | `--kv-cache-memory-bytes VALUE` | KV cache memory (bytes). Explicit KV cache size; overrides gpu_memory_utilization when set. | engine default | (min 0) |
+| `max_model_len` | `--max-model-len VALUE` | Max model length | engine default | (min 1) |
+| `kv_cache_dtype` | `--kv-cache-dtype VALUE` | KV cache dtype | `auto` | `auto`, `bfloat16`, `float16`, `fp8`, `fp8_e4m3`, `fp8_e5m2`, `fp8_inc`, `nvfp4` |
+| `quantization` | `--quantization VALUE` | Quantization | engine default | `awq`, `awq_marlin`, `gptq`, `gptq_marlin`, `fp8`, `compressed-tensors`, `modelopt`, `modelopt_fp4`, `mxfp4`, `torchao`, `experts_int8`, `bitsandbytes` |
+| `block_size` | `--block-size VALUE` | KV block size | `16` | (min 1) |
+| `cpu_offload_gb` | `--cpu-offload-gb VALUE` | CPU offload (GiB) Emitted only when > 0. | engine default | (min 0) |
 
-**GGUF Support** (Experimental):
-```python
-local_path: "model-folder/model.Q8_0.gguf"  # Single-file GGUF only
-tokenizer: "meta-llama/Meta-Llama-3-8B"      # HF tokenizer repo
-hf_config_path: "/models/model-folder"       # Optional config path
+#### Throughput & scheduling
 
-# Limitations:
-# - Single-file GGUF only (merge multi-part first)
-# - Less optimized than HF checkpoints
-# - Experimental support, may have issues
-```
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `enable_prefix_caching` | `--enable-prefix-caching` / `--no-enable-prefix-caching` | Prefix caching | on |  |
+| `prefix_caching_hash_algo` | `--prefix-caching-hash-algo VALUE` | Prefix cache hash | engine default | `sha256`, `sha256_cbor_64bit`, `xxhash`, `xxhash_cbor` |
+| `max_num_seqs` | `--max-num-seqs VALUE` | Max concurrent sequences | `128` | (min 1) |
+| `max_num_batched_tokens` | `--max-num-batched-tokens VALUE` | Max batched tokens | `2048` | (min 1) |
+| `enable_chunked_prefill` | `--enable-chunked-prefill` / `--no-enable-chunked-prefill` | Chunked prefill | on |  |
+| `enforce_eager` | `--enforce-eager` | Enforce eager (no compile / CUDA graphs). Fastest startup, slower decode. Leave off for production. | off |  |
+| `cuda_graph_sizes` | `--cudagraph-capture-sizes a b c` (comma list) | CUDA graph capture sizes. Comma-separated batch sizes to capture, e.g. 1,2,4,8,16. | engine default |  |
+| `compilation_config_json` | `--compilation-config '{...}'` | Compilation config (JSON) | engine default |  |
+| `async_scheduling` | `--async-scheduling` | Async scheduling | engine default |  |
+| `attention_backend` | `--attention-backend VALUE` | Attention backend | engine default | `FLASH_ATTN`, `FLASHINFER`, `TRITON_ATTN`, `FLEX_ATTENTION`, `TORCH_SDPA` |
+| `enable_sleep_mode` | `--enable-sleep-mode` | Sleep mode | engine default |  |
 
----
+#### Model behaviour
 
-## GGUF Support (Experimental)
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `hf_overrides_json` | `--hf-overrides '{...}'` | HF config overrides (JSON). JSON merged into the model config, e.g. {"rope_parameters": {"rope_type": "yarn", "factor": 4.0}}. | engine default |  |
+| `generation_config` | `--generation-config VALUE` | Generation config source. 'auto' uses the model's generation_config.json, 'vllm' uses vLLM defaults, or a path. | engine default |  |
+| `override_generation_config_json` | `--override-generation-config '{...}'` | Override generation config (JSON) | engine default |  |
+| `reasoning_parser` | `--reasoning-parser VALUE` | Reasoning parser | engine default | `deepseek_r1`, `deepseek_v3`, `qwen3`, `glm45`, `granite`, `hunyuan_a13b`, `mistral`, `gpt_oss`, `step3`, `minimax_m2`, `olmo3`, `ernie45`, `seed_oss`, `kimi_k2` |
+| `enable_auto_tool_choice` | `--enable-auto-tool-choice` | Auto tool choice | engine default |  |
+| `tool_call_parser` | `--tool-call-parser VALUE` | Tool call parser | engine default | `hermes`, `mistral`, `llama3_json`, `llama4_pythonic`, `granite`, `granite-20b-fc`, `deepseek_v3`, `deepseek_v31`, `openai`, `kimi_k2`, `glm45`, `glm47`, `qwen3_xml`, `qwen3_coder`, `pythonic`, `internlm`, `jamba`, `phi4_mini_json`, `xlam`, `hunyuan_a13b`, `minimax`, `seed_oss`, `step3`, `longcat`, `olmo3` |
+| `structured_outputs_config_json` | `--structured-outputs-config '{...}'` | Structured outputs config (JSON). e.g. {"backend": "xgrammar"} | engine default |  |
+| `limit_mm_per_prompt_json` | `--limit-mm-per-prompt '{...}'` | Multimodal limits (JSON). e.g. {"image": 4, "video": 1} | engine default |  |
 
-vLLM has **experimental** support for loading GGUF files. While functional, it has important limitations compared to native SafeTensors/HF format.
+#### Adapters, speculative decoding & multimodal
 
-### When to Use vLLM with GGUF
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `enable_lora` | `--enable-lora` | Enable LoRA | engine default |  |
+| `lora_modules_json` | `--lora-modules` (repeated) | LoRA modules (JSON list of {name, path}) Requires `enable_lora=True`. | engine default |  |
+| `max_loras` | `--max-loras VALUE` | Max LoRAs per batch | engine default | (min 1) |
+| `max_lora_rank` | `--max-lora-rank VALUE` | Max LoRA rank | engine default | (min 1) |
+| `max_cpu_loras` | `--max-cpu-loras VALUE` | Max CPU LoRAs | engine default | (min 1) |
+| `speculative_config_json` | `--speculative-config '{...}'` | Speculative decoding config (JSON). e.g. {"method": "ngram", "num_speculative_tokens": 5} or {"method": "eagle3", "model": "..."} | engine default |  |
 
-**Consider vLLM + GGUF when**:
-- You only have GGUF files (no SafeTensors)
-- Need vLLM's batching/PagedAttention features
-- Single-file GGUF available
+#### Logging & diagnostics
 
-**Use llama.cpp instead when**:
-- Multi-part GGUF files (vLLM doesn't support)
-- GPT-OSS/Harmony architecture
-- Want native GGUF optimization
+| Field (API / form) | Flag | Meaning | Default | Choices / range |
+|---|---|---|---|---|
+| `enable_log_requests` | `--enable-log-requests` | Log requests | engine default |  |
+| `disable_log_stats` | `--disable-log-stats` | Disable stats logging | engine default |  |
+| `max_log_len` | `--max-log-len VALUE` | Max logged prompt chars Emitted only when > 0. | engine default | (min 0) |
+| `debug_logging` | env `VLLM_LOGGING_LEVEL`=`DEBUG` | Debug logging | engine default |  |
+| `trace_mode` | env `VLLM_TRACE_FUNCTION`=`1` | Trace mode (very slow) | engine default |  |
+| `engine_request_timeout` | env `VLLM_ENGINE_ITERATION_TIMEOUT_S` | Engine iteration timeout (s) | engine default | (min 1) |
+<!-- END GENERATED -->
 
-### GGUF Limitations in vLLM
+### Removed or renamed since earlier Cortex releases
 
-| Aspect | vLLM GGUF | vLLM SafeTensors | llama.cpp GGUF |
-|--------|-----------|------------------|----------------|
-| Multi-part files | ❌ No | ✅ Yes (shards) | ✅ Yes |
-| Performance | ⚠️ Lower | ✅ Optimal | ✅ Optimal |
-| Tokenizer | ❌ External required | ✅ Embedded | ✅ Embedded |
-| Architecture support | ⚠️ Limited | ✅ Full | ✅ Full |
-
-### GGUF Configuration
-
-**Required Settings**:
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `local_path` | Path to single-file GGUF | `/models/folder/model.Q8_0.gguf` |
-| `tokenizer` | HuggingFace tokenizer repo ID | `meta-llama/Llama-3.1-8B-Instruct` |
-
-**Optional Settings**:
-
-| Field | Description | Default |
-|-------|-------------|---------|
-| `hf_config_path` | Path to model config.json | Auto-detect |
-| `gguf_weight_format` | Force format: `auto`, `gguf`, `ggml` | `auto` |
-
-### GGUF Weight Format
-
-The `--gguf-weight-format` flag controls how vLLM interprets GGUF files:
-
-| Value | Description | When to Use |
-|-------|-------------|-------------|
-| `auto` | Auto-detect format | Default, works for most files |
-| `gguf` | Force modern GGUF | If auto-detection fails |
-| `ggml` | Force legacy GGML | Old GGML-format files only |
-
-**In Cortex UI**: Model Form → vLLM → Production Settings → GGUF Weight Format
-
-This option only appears when a GGUF file is selected.
-
-### Example: vLLM with GGUF
-
-```yaml
-# Model configuration
-engine_type: vllm
-local_path: /models/llama-model/llama-3-8b-Q8_0.gguf
-tokenizer: meta-llama/Llama-3.1-8B-Instruct
-gguf_weight_format: auto
-
-# Resulting vLLM command:
-vllm serve /models/llama-model/llama-3-8b-Q8_0.gguf \
-  --tokenizer meta-llama/Llama-3.1-8B-Instruct \
-  --gguf-weight-format auto \
-  # ... other flags
-```
-
-### Smart Engine Guidance
-
-When Cortex detects GGUF files, it provides smart recommendations:
-
-**Multi-part GGUF + vLLM selected**:
-- ⚠️ Warning: vLLM doesn't support multi-part GGUF
-- ✅ Recommended: Switch to llama.cpp or use SafeTensors
-
-**GGUF + SafeTensors available**:
-- 💡 Tip: SafeTensors performs better with vLLM
-- 🔄 One-click switch to SafeTensors
-
-See [GGUF Format Guide](gguf-format.md) for complete GGUF documentation.
+| Old field / flag | Now |
+|---|---|
+| `swap_space` / `--swap-space` | Removed (V1 engine has no CPU swap; use `cpu_offload_gb`). |
+| `cuda_graph_sizes` → `--cuda-graph-sizes` | Same field, now emits `--cudagraph-capture-sizes`. |
+| `disable_log_requests` / `--disable-log-requests` | Inverted: `enable_log_requests` → `--enable-log-requests` (requests are not logged by default). |
+| `VLLM_USE_V1` env | Removed; v0.28 only has the V1 engine. |
+| `--task embed` | Removed; embedding models are detected from the checkpoint (`task=embed` on the Cortex record only selects the gateway route). |
+| `python3 -m vllm.entrypoints.openai.api_server` | The image entrypoint is `vllm serve`; use `entrypoint_override` only for custom images. |
+| TP slider in the form | `tp_size` is derived from `selected_gpus`. |
 
 ---
 
-## Performance Tuning
+## Custom arguments and environment
 
-### Memory Optimization
+Anything not covered by a field goes into **Custom startup args** (`engine_startup_args_json`,
+an ordered list of `{flag, value}`) and **Custom environment variables**
+(`engine_startup_env_json`). Custom args are appended after Cortex's own flags; a custom flag
+that duplicates a field flag overrides it and the dry-run shows the final command.
 
-**1. GPU Memory Utilization** (0.05 - 0.98):
-```python
-gpu_memory_utilization: 0.9  # Default
+Rejected at save time:
 
-# Lower (0.7-0.8): More headroom, fewer OOM crashes
-# Higher (0.92-0.95): Max KV cache, more sequences
-```
+- flags Cortex owns: `--host`, `--port`, `--api-key`, `--api-key-file`, `--ssl-*`, `--root-path`,
+  `--model`, `--served-model-name`, `--uvicorn-log-level`;
+- protected env vars: `NVIDIA_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `HF_HUB_OFFLINE`,
+  `VLLM_API_KEY` (plus the llama.cpp `LLAMA_*` names). See
+  [Setting custom environment variables](setting-custom-env-vars.md).
 
-**2. KV Cache dtype** (50% memory savings):
-```python
-kv_cache_dtype: "fp8"  # Halves KV cache VRAM
-
-# Quality impact: Minimal on most models
-# Best for: Long contexts, many concurrent requests
-```
-
-**3. Block Size** (Memory granularity):
-```python
-block_size: 16  # Default, balanced
-
-# block_size=8: Less fragmentation, tighter VRAM
-# block_size=32: Less overhead, needs more VRAM
-```
-
-**4. CPU Offload** (Last resort):
-```python
-cpu_offload_gb: 4  # Offload 4GB per GPU to CPU RAM
-
-# Pros: Fits larger models
-# Cons: Significantly slower, requires fast interconnect
-```
-
-**5. Swap Space** (KV cache spillover):
-```python
-swap_space_gb: 16  # Allow 16GB CPU RAM for KV cache
-
-# Use when: Long contexts, tight VRAM
-# Impact: Latency increases, but prevents OOM
-```
-
-### Production Settings (New in 2025)
-
-**1. Attention Backend** (Performance tuning):
-```python
-attention_backend: "FLASH_ATTN"  # Force specific attention implementation
-
-# Options: AUTO (default), FLASH_ATTN, XFORMERS, etc.
-# Use to optimize for specific GPU architectures
-```
-
-**2. Log Control** (Production cleanliness):
-```python
-disable_log_requests: True   # Suppress per-request logging
-disable_log_stats: True      # Suppress periodic stats logging
-
-# Reduces log volume significantly in production
-# Recommended for high-throughput deployments
-```
-
-**3. V1 Engine** (Experimental):
-```python
-vllm_v1_enabled: True  # Enable experimental vLLM V1 engine
-
-# ⚠️ Breaking changes: best_of>1 not supported in V1
-# Cortex will warn via X-Cortex-Warnings header if incompatible params detected
-```
-
-**4. Request Timeout** (Long inference protection):
-```python
-request_timeout_sec: 600  # 10 minutes
-
-# Sets VLLM_ENGINE_ITERATION_TIMEOUT_S environment variable
-# NOTE: This is NOT a CLI argument (--request-timeout is invalid)
-# Prevents hung requests from blocking resources
-```
-
-**5. Debug Logging** (Troubleshooting):
-```python
-debug_logging: True   # Sets VLLM_LOGGING_LEVEL=DEBUG
-trace_mode: True      # Sets VLLM_TRACE_FUNCTION=1
-
-# Use for debugging startup/inference issues
-# Disable in production (verbose output)
-```
-
-### Throughput Optimization
-
-**1. Max Sequences** (Concurrency):
-```python
-max_num_seqs: 256  # Default
-
-# Higher: More concurrent requests, more VRAM
-# Lower: Less memory pressure, lower throughput
-# Sweet spot: 128-512 depending on model size
-```
-
-**2. Max Batched Tokens**:
-```python
-max_num_batched_tokens: 2048  # Default
-
-# Higher: More throughput, more VRAM, higher latency per batch
-# Lower: Less VRAM, lower throughput
-# Recommendation: 1024-4096
-```
-
-**3. Prefix Caching**:
-```python
-enable_prefix_caching: True
-
-# Speeds up: Repeated system prompts, RAG contexts
-# Overhead: Small memory cost, hash computation
-```
-
-**4. Chunked Prefill**:
-```python
-enable_chunked_prefill: True
-
-# Improves: Long prompt throughput
-# By: Processing prefill in chunks
-```
-
-**5. CUDA Graphs**:
-```python
-# Only when enforce_eager=False
-cuda_graph_sizes: "2048,4096,8192"
-
-# Pre-captures kernels for common sequence lengths
-# Reduces overhead, improves throughput
-```
+Typical uses: `--mamba-ssm-cache-dtype float16`, `--reasoning-parser-plugin /models/...py`,
+`VLLM_USE_FLASHINFER_MOE_FP8=1`, `NCCL_P2P_DISABLE=1`.
 
 ---
 
-## Supported Architectures
+## Engine images and driver compatibility
 
-vLLM supports 100+ model architectures. Common ones in Cortex deployments:
+`engine_image` (per model) overrides `VLLM_IMAGE` (global). `engine_version` and
+`engine_digest` are free-text references shown in the UI and exports. The offline pre-check
+(`scripts/verify-offline-images.sh`) lists every `engine_image` stored in the database so they
+can be added to the air-gap package (`EXTRA_IMAGES="..." make prepare-offline`).
 
-| Family | Example Models | Notes |
-|--------|---------------|-------|
-| **Llama** | Llama 2, Llama 3, Llama 3.1, 3.2, 3.3 | Excellent support, all sizes |
-| **Mistral** | Mistral 7B, Mixtral 8x7B, 8x22B | Full MoE support |
-| **Qwen** | Qwen 1.5, 2, 2.5, QwQ | Vision models supported |
-| **Phi** | Phi-2, Phi-3, Phi-3.5 | Small, efficient |
-| **DeepSeek** | DeepSeek V2, V3, R1 | MLA attention, MTP |
-| **Gemma** | Gemma 2B, 7B, 27B | Google models |
+| Host driver | CUDA in image | Image |
+|---|---|---|
+| >= 580 | 13.0 | `vllm/vllm-openai:v0.28.0` (default) |
+| 575.51 - 579 | 12.9 | `vllm/vllm-openai:v0.28.0-cu129` |
+| 550 - 575.50 | 12.8 | `vllm/vllm-openai:v0.24.0-ubuntu2404` (last CUDA 12.8 tag; older CLI, see the vLLM release notes) |
+| < 550 | - | Update the driver ([UPDATE_NVIDIA_DRIVERS](../operations/UPDATE_NVIDIA_DRIVERS.md)) |
 
-**NOT Supported:**
-- ❌ **Harmony architecture** (GPT-OSS 20B/120B) - Use llama.cpp
-- ❌ Custom architectures without HF integration
-- ❌ Models requiring unreleased HF transformers features
+Symptom of a mismatch: the container exits immediately with
+`nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.0` and the model
+shows `state=failed`, `state_reason=container_exited: ...`. Fix with `engine_image` for that
+model or `VLLM_IMAGE` for all; see the [runbooks](../operations/runbooks.md#driver-cuda-mismatch).
 
----
-
-## Multi-GPU Configuration
-
-### Topology Considerations
-
-**4x L40S Setup (typical Cortex deployment):**
-
-```python
-# For 70B model:
-tensor_parallel_size: 4  # Split across all 4 GPUs
-gpu_memory_utilization: 0.92
-max_model_len: 8192
-swap_space_gb: 16
-
-# Memory per GPU:
-# Weights: ~18GB (70B / 4 GPUs)
-# KV cache: ~8GB (depends on context, sequences)
-# Overhead: ~3GB
-# Total: ~29GB per GPU (fits in 46GB L40S VRAM)
-```
-
-**NCCL Settings** (Multi-GPU Communication):
-
-Cortex automatically configures:
-```python
-NCCL_P2P_DISABLE=1         # Disable peer-to-peer (safer default)
-NCCL_IB_DISABLE=1          # Disable InfiniBand (not present)
-NCCL_SHM_DISABLE=0         # Allow shared memory (faster)
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True  # Reduce fragmentation
-```
-
-### Multi-Node Deployment
-
-For models >175B or distributed load:
-
-```python
-# Node 1 (Head):
-tensor_parallel_size: 4
-pipeline_parallel_size: 2
-# Total: 8 GPUs used
-
-# Start with Ray cluster:
-# ray start --head
-# vllm serve --tensor-parallel-size 4 --pipeline-parallel-size 2
-```
-
-**Cortex Support:**
-- Single-node: ✅ Fully supported
-- Multi-node: ⚠️ Requires manual Ray setup (not yet in Cortex UI)
+A worked example (driver-gated image selection, custom parsers, MTP speculative decoding,
+request defaults) is in [Nemotron 3 Super](nemotron-3-super.md).
 
 ---
 
-## Deployment Modes in Cortex
+## Memory and throughput guidance
 
-### Online Mode (HuggingFace Download)
-
-**Use case**: Model on HuggingFace Hub, network available
-
-```
-Model Form:
-├─ Mode: Online
-├─ Repo ID: meta-llama/Llama-3-8B-Instruct
-└─ HF Token: (optional, for gated models)
-
-Cortex does:
-1. Mounts HF cache volume
-2. Sets HF_HUB_TOKEN environment variable
-3. vLLM downloads model on first start
-4. Cached for subsequent starts
-```
-
-**Benefits:**
-- Easy setup, just specify repo ID
-- Automatic updates when model revised
-- Shared cache across models
-
-**Requirements:**
-- Network access to Hugging Face
-- Sufficient disk space for model downloads
-- HF token for gated models (Llama 3, etc.)
-
-**📖 For detailed HuggingFace download instructions, see:**
-- `docs/models/huggingface-model-download.md` - Complete guide for downloading HF models
-
-### Offline Mode (Local Files)
-
-**Use case**: Air-gapped, pre-downloaded models
-
-```
-Model Form:
-├─ Mode: Offline
-├─ Local Path: llama-3-8b-instruct
-└─ Base Dir: /var/cortex/models
-
-Cortex does:
-1. Mounts models directory read-only
-2. Sets HF_HUB_OFFLINE=1
-3. vLLM loads from /models/llama-3-8b-instruct
-```
-
-**Directory Structure:**
-```
-/var/cortex/models/llama-3-8b-instruct/
-├─ model-00001-of-00004.safetensors
-├─ model-00002-of-00004.safetensors
-├─ model-00003-of-00004.safetensors
-├─ model-00004-of-00004.safetensors
-├─ config.json
-├─ tokenizer.json
-├─ tokenizer_config.json
-└─ special_tokens_map.json
-```
-
-**📖 For detailed offline model preparation instructions, see:**
-- `docs/models/huggingface-model-download.md` - Complete guide for downloading and preparing HF models for offline use
+- `gpu_memory_utilization` (default 0.92) is the fraction of each GPU vLLM reserves for
+  weights + KV cache. Lower it (0.85, 0.80) on `CUDA out of memory` during startup profiling,
+  or pin the KV cache explicitly with `kv_cache_memory_bytes`.
+- `max_model_len` bounds the context; the KV cache per token is
+  `2 x n_layer x n_kv_heads x head_dim x bytes(kv_cache_dtype)`. Halving it roughly doubles
+  how many concurrent sequences fit.
+- `max_num_seqs` / `max_num_batched_tokens` trade latency for throughput; keep chunked prefill
+  on (default).
+- `enforce_eager` disables CUDA graphs: faster startup, markedly slower decode. Leave it off in
+  production; the startup timeout (`startup_timeout_sec`, default `VLLM_STARTUP_TIMEOUT=600`)
+  must cover graph capture on large models.
+- `kv_cache_dtype=fp8` halves KV memory but needs calibrated scales for some checkpoints.
+- Quantized checkpoints: leave `quantization` blank so vLLM reads it from `config.json`; set it
+  only to force a kernel (`awq_marlin`, `gptq_marlin`).
 
 ---
 
-## Advanced Features
+## Request defaults
 
-### Prefix Caching
-
-Caches common prompt prefixes across requests:
-
-**Use case**: RAG with repeated system prompts, few-shot examples
-
-**Example:**
-```
-Request 1: [System: "You are a helpful assistant"] + [User: "Question 1"]
-Request 2: [System: "You are a helpful assistant"] + [User: "Question 2"]
-                     ↑ This prefix is cached! ↑
-
-# 30-50% faster for requests sharing prefixes
-```
-
-**Configuration:**
-```python
-enable_prefix_caching: True
-prefix_caching_hash_algo: "sha256"  # Reproducible cross-language
-```
-
-### Speculative Decoding
-
-Draft model generates tokens, main model verifies:
-
-**Benefits**: 2-3x speedup for long outputs
-
-**Status in Cortex**: Planned, not yet implemented in UI
-
-### Embeddings
-
-vLLM supports embedding models:
-
-```python
-task: "embed"
-
-# Auto-detects max sequence length from model config
-# Uses --task embed flag
-# Routes to /v1/embeddings endpoint
-```
-
-**Supported models:**
-- BERT variants
-- Sentence Transformers
-- E5, BGE, UAE families
-- Custom embedding architectures
+Per-request sampling defaults (`temperature`, `top_p`, `top_k`, `repetition_penalty`,
+`frequency_penalty`, `presence_penalty`) and arbitrary extras (`vllm_xargs`, `stop`, ...) live in
+`request_defaults_json` and are merged by the gateway into requests that do not set the key.
+They take effect immediately, without a restart. Precedence: client request > Cortex request
+defaults > the model's `generation_config.json` (when `generation_config=auto`) > vLLM defaults.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-**1. OOM (Out of Memory)**
-
-```
-Error: "CUDA out of memory"
-
-Solutions:
-1. Lower gpu_memory_utilization (0.9 → 0.8)
-2. Reduce max_model_len
-3. Enable kv_cache_dtype="fp8"
-4. Increase tensor_parallel_size
-5. Use swap_space_gb or cpu_offload_gb
-```
-
-**2. Unsupported Architecture**
-
-```
-Error: "Model architecture 'harmony' is not supported"
-
-This is the GPT-OSS issue!
-
-Solutions:
-- Use llama.cpp instead (supports any GGUF)
-- Wait for vLLM to add architecture support
-- Implement custom architecture (advanced)
-```
-
-**3. Chat Template Missing**
-
-```
-Error: "Chat template not found"
-
-Happens with: Models without chat template in tokenizer_config.json
-
-Cortex handles this:
-- Fallback to /v1/completions endpoint
-- Converts messages to plain prompt
-- Returns normalized chat.completion response
-```
-
-**4. Tokenizer Issues**
-
-```
-Error: "Tokenizer not found for GGUF"
-
-For GGUF in vLLM:
-- Provide tokenizer HF repo: "meta-llama/Llama-3-8B"
-- Or hf_config_path to local tokenizer.json
-```
-
----
-
-## Performance Benchmarks (Typical)
-
-### Llama 3 8B on Single L40S:
-
-```
-Configuration:
-- dtype: bfloat16
-- max_model_len: 8192
-- gpu_memory_utilization: 0.9
-
-Results:
-- Throughput: ~50-70 tokens/sec/request
-- Concurrent requests: 30-40 (8K context)
-- TTFT (time to first token): 50-100ms
-- Latency (128 tokens): ~2-3 seconds
-```
-
-### Llama 3 70B on 4x L40S (TP=4):
-
-```
-Configuration:
-- dtype: bfloat16
-- tensor_parallel_size: 4
-- max_model_len: 8192
-- kv_cache_dtype: fp8
-
-Results:
-- Throughput: ~20-30 tokens/sec/request
-- Concurrent requests: 10-15 (8K context)
-- TTFT: 150-300ms
-- Latency (128 tokens): ~5-8 seconds
-```
-
----
-
-## Resource Calculator & Pre-Start Validation
-
-### VRAM Estimation (Dry-Run)
-
-Before starting a model, Cortex validates the configuration:
-
-```
-Click "Start" → Dry-Run Validation → Warnings Shown → Confirm → Container Starts
-```
-
-**What gets validated:**
-- Estimated VRAM usage vs available GPU memory
-- Quantization method compatibility with model type
-- Path existence for offline models
-- GGUF tokenizer availability in offline mode
-
-**Example warning:**
-```
-⚠️ Potential Issues Detected
-- Quantization 'awq' may not work: model path doesn't contain 'awq'
-- Ensure you're using a pre-quantized AWQ model checkpoint
-```
-
-### Resource Calculator (Models page → Resource Calculator)
-
-**Inputs:**
-- Model parameters (7B, 70B, etc.)
-- Hidden size, num layers
-- Target context length
-- Concurrent sequences
-- TP size, quantization
-
-**Outputs:**
-- Per-GPU memory estimate
-- Fits/doesn't fit analysis
-- Auto-tuning suggestions
-- Downloadable report
-
-**Auto-fit Feature:**
-Automatically adjusts settings to fit available VRAM:
-1. Enables KV FP8
-2. Tries quantization (INT8, then AWQ)
-3. Increases TP size
-4. Reduces context/sequences
-5. Suggests CPU offload/swap if needed
-
----
-
-## Best Practices
-
-### Development:
-- ✅ Start with `enforce_eager=True` (easier debugging)
-- ✅ Use small context (4K-8K) initially
-- ✅ Monitor logs for warnings
-- ✅ Test with single request first
-
-### Production:
-- ✅ Disable `enforce_eager` for CUDA graphs
-- ✅ Set optimal `max_num_seqs` for workload
-- ✅ Enable prefix caching for RAG
-- ✅ Use FP8 KV cache on supported GPUs
-- ✅ Monitor metrics via Prometheus
-
-### Multi-GPU:
-- ✅ Use TP for models that don't fit single GPU
-- ✅ Keep TP ≤ 8 (diminishing returns after)
-- ✅ Verify NCCL settings for your network
-- ✅ Test with synthetic load before production
-
----
-
-## Integration with Cortex Gateway
-
-### Model Registry
-
-When vLLM container starts:
-```python
-# Cortex registers model endpoint:
-register_model_endpoint(
-    served_name="llama-3-8b-instruct",
-    url="http://vllm-model-3:8000",
-    task="generate"
-)
-
-# Gateway routes requests:
-POST /v1/chat/completions {"model": "llama-3-8b-instruct"}
-→ Proxied to: http://vllm-model-3:8000/v1/chat/completions
-```
-
-### Health Monitoring
-
-Cortex polls vLLM health every 15 seconds:
-```
-GET http://vllm-model-3:8000/health
-Response: {"status": "ok"}
-
-# Also discovers models:
-GET http://vllm-model-3:8000/v1/models
-Response: {"data": [{"id": "llama-3-8b-instruct"}]}
-```
-
-### Metrics
-
-vLLM exposes Prometheus metrics on port 8000:
-```
-# Tokens processed:
-vllm:prompt_tokens_total
-vllm:generation_tokens_total
-
-# Performance:
-vllm:time_to_first_token_seconds
-vllm:time_per_output_token_seconds
-
-# Resource usage:
-vllm:gpu_cache_usage_perc
-vllm:cpu_cache_usage_perc
-```
-
-Cortex gateway aggregates and re-exposes these.
-
----
-
-## Migration from Other Engines
-
-### From Text Generation Inference (TGI):
-
-vLLM is generally faster and more memory-efficient:
-
-```
-TGI → vLLM:
-- Similar API, minimal code changes
-- Better throughput (1.5-3x)
-- PagedAttention vs continuous batching
-- Easier multi-GPU setup
-```
-
-### From llama.cpp:
-
-When to migrate to vLLM:
-- ✅ Model has HF checkpoint (not just GGUF)
-- ✅ Architecture is supported
-- ✅ Need maximum throughput
-- ✅ Have sufficient VRAM
-
-When to stay on llama.cpp:
-- ✅ GGUF-only model
-- ✅ Custom architecture
-- ✅ CPU inference priority
-- ✅ Simpler deployment
-
----
-
-## Limitations
-
-### What vLLM Can't Do (Use llama.cpp instead):
-
-1. **Custom Architectures**:
-   - Harmony (GPT-OSS 20B/120B)
-   - Unreleased experimental models
-   - Models with trust_remote_code issues
-
-2. **GGUF-Focused Workflows**:
-   - Multi-file GGUF (must merge first)
-   - Heavily quantized models (Q4_K_M, Q2_K, etc.)
-   - LoRA adapters with GGUF
-
-3. **CPU Inference**:
-   - vLLM can run on CPU but very slow
-   - llama.cpp much better for CPU workloads
-
----
-
-## References
-
-- **Official Docs**: https://docs.vllm.ai/
-- **GitHub**: https://github.com/vllm-project/vllm
-- **Docker Hub**: https://hub.docker.com/r/vllm/vllm-openai
-- **Cortex Implementation**: `backend/src/docker_manager.py`
-- **Model Form**: `frontend/src/components/models/ModelForm.tsx`
-
----
-
-**For GPT-OSS 120B and other Harmony architecture models, see**: `llamaCPP.md` (in this directory)  
-**For engine comparison and decision matrix, see**: `engine-comparison.md` (in this directory)
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `state=failed`, `container_exited`, log says `cuda>=13.0` | driver too old for the image | `engine_image` `v0.28.0-cu129` |
+| `startup_timeout_after_600s` | big model, CUDA graph capture | raise `startup_timeout_sec`; check `docker logs vllm-model-<id>` |
+| `CUDA out of memory` while profiling | KV reservation too large | lower `gpu_memory_utilization` / `max_model_len` |
+| `KeyError` for a parser name | wrong parser or older image | check the `reasoning_parser` / `tool_call_parser` choices for this image |
+| `unrecognized arguments` | custom arg not in this vLLM version | remove it; the dry-run cannot validate engine-side flags |
+| gateway 502 for a `running` model | engine crashed after ready | supervisor marks `failed` on the next probe; see [runbooks](../operations/runbooks.md) |
+
+Related: [Engine comparison](engine-comparison.md), [Model management](model-management.md),
+[HuggingFace download](huggingface-model-download.md).

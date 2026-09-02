@@ -38,6 +38,7 @@ cortex_stress_test_results/
 
 # Offline deployment packages
 cortex-offline-images/
+cortex-offline-bundle/
 offline-images/
 *.tar
 !docs/**/*.tar
@@ -65,3 +66,11 @@ cortexUpgrade*.md
 key.json
 *.key.json
 secrets.json
+# local env files (never commit real values)
+backend/.env.dev
+backend/.env.prod
+
+# per-service env files are never tracked
+backend/.env
+backend/.env.*
+!backend/.env.example

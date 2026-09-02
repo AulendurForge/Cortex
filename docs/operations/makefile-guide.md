@@ -188,9 +188,11 @@ make prune
 
 ### Environment Selection
 
-Run in production mode:
+Run in production mode (see [Production deployment](production-deployment.md)):
 
 ```bash
+make build ENV=prod
+make prod-check
 make up ENV=prod
 make down ENV=prod
 ```
@@ -208,8 +210,9 @@ make health
 ```
 
 Available profiles:
-- `linux` - Enables node-exporter for host CPU/memory/disk metrics
-- `gpu` - Enables DCGM exporter for NVIDIA GPU metrics
+- `linux` - node-exporter (host CPU/memory/disk) and cAdvisor (containers)
+- `gpu` - DCGM exporter (NVIDIA GPU metrics)
+- `tools` - pgadmin on `127.0.0.1:5050` (dev only)
 
 ### Monitoring Commands
 
@@ -236,14 +239,14 @@ All metrics visualized in Admin UI → System Monitor page with real-time charts
 ### Running Tests
 
 ```bash
-# Run smoke tests
-make test
-
-# Test API endpoints
-make test-api
-
-# Validate complete configuration
-make validate
+make test-backend        # pytest inside the gateway container (unit + integration against it)
+make test-frontend       # vitest + tsc typecheck inside the frontend container
+make test-live GGUF=qwen2.5-0.5b-instruct/qwen2.5-0.5b-instruct-q4_k_m.gguf   # real llama.cpp start + chat
+make test                # = test-backend + test-frontend
+CORTEX_API_KEY=<key> make smoke   # post-deploy smoke test with a real key
+make validate            # host configuration (IP, CORS, listeners, firewall)
+make migrate             # alembic upgrade head inside the gateway
+make versions            # pinned images from versions.env, config.py, compose, offline manifest
 ```
 
 ### Production Deployment Check
@@ -252,11 +255,10 @@ Before deploying to production:
 
 ```bash
 make prod-check
-
-# This will verify:
-# - Dev auth is disabled
-# - Security settings are configured
-# - Required environment variables are set
+# scripts/prod-check.sh: required secrets present and not defaults, CORS origin set (no *),
+# rendered prod compose has no :latest tags and GATEWAY_DEV_ALLOW_ALL_KEYS=false,
+# versions.env matches backend/src/config.py, /var/cortex dirs exist, port 9090 free.
+# Exit code 1 on any failure.
 ```
 
 ## Complete Command Reference
@@ -286,8 +288,8 @@ make help
 
 ### Setup & Configuration
 - `make quick-start` - Complete setup in one command
-- `make bootstrap` - Create admin user (interactive)
-- `make bootstrap-default` - Create default admin
+- `make bootstrap` - Alias for `make setup-admin`
+- `make setup-admin` - Set or reset the admin credentials (`.env` + running gateway)
 - `make login` - Login and save session
 - `make create-key` - Generate API key
 
@@ -520,8 +522,8 @@ Print this and keep it handy:
 │ URLs (use IP from 'make ip', not localhost):    │
 │   Gateway:     http://YOUR_IP:8084              │
 │   Admin UI:    http://YOUR_IP:3001              │
-│   Prometheus:  http://YOUR_IP:9090              │
-│   PgAdmin:     http://YOUR_IP:5050              │
+│   Prometheus:  http://YOUR_IP:9090 (PROM_PORT)  │
+│   PgAdmin:     http://127.0.0.1:5050 (tools)    │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -536,14 +538,8 @@ For more detailed documentation:
 
 **For Production Deployments:**
 
-1. Change default admin password immediately after `quick-start`
-2. Set `ENV=prod` when running in production
-3. Configure proper CORS origins (not `*`)
-4. Enable TLS via reverse proxy (nginx/traefik)
-5. Set strong `INTERNAL_VLLM_API_KEY`
-6. Disable dev auth: `GATEWAY_DEV_ALLOW_ALL_KEYS=false`
-7. Set up regular automated backups
-8. Review security checklist: `make prod-check`
+Follow [Production deployment](production-deployment.md): secrets in `.env`, `make build ENV=prod`,
+`make prod-check`, `make up ENV=prod`, TLS reverse proxy, backups.
 
 ---
 

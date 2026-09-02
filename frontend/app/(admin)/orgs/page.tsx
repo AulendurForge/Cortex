@@ -6,11 +6,13 @@ import apiFetch from '../../../src/lib/api-clients';
 import { useState } from 'react';
 import { Modal } from '../../../src/components/Modal';
 import { ConfirmDialog } from '../../../src/components/Confirm';
+import { useToast } from '../../../src/providers/ToastProvider';
 
 type Org = { id: number; name: string };
 
 export default function OrgsPage() {
   const qc = useQueryClient();
+  const { addToast } = useToast();
   const [open, setOpen] = useState(false);
   const [editOrg, setEditOrg] = useState<Org | null>(null);
   const orgs = useQuery({ queryKey: ['orgs'], queryFn: () => apiFetch<Org[]>('/admin/orgs') });
@@ -26,8 +28,9 @@ export default function OrgsPage() {
   const remove = useMutation({
     mutationFn: (id: number) => apiFetch(`/admin/upstreams/orgs/${id}`, { method: 'DELETE' }).catch(() => apiFetch(`/admin/orgs/${id}`, { method: 'DELETE' })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['orgs'] }),
-    onError: (e: any) => {
-      alert(`Delete failed${e?.request_id ? ` (request_id: ${e.request_id})` : ''}`);
+    onError: (e: unknown) => {
+      const err = e as { message?: string; request_id?: string } | undefined;
+      addToast({ title: 'Delete failed', description: `${err?.message || ''}${err?.request_id ? ` (request_id: ${err.request_id})` : ''}`.trim() || undefined, kind: 'error' });
     },
   });
 

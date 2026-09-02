@@ -1,61 +1,245 @@
 name: cortex
 
+# Production stack. See docs/operations/production-deployment.md.
+#
+#   cp .env.example .env            # then set the required secrets below
+#   make build ENV=prod             # builds cortex-gateway:${CORTEX_VERSION} and cortex-frontend:${CORTEX_VERSION}
+#   make prod-check                 # refuses to continue on default/missing secrets or floating tags
+#   make up ENV=prod
+#
+# Required variables (compose aborts if unset):
+#   INTERNAL_VLLM_API_KEY  - shared secret between the gateway and every model container
+#   SESSION_SECRET         - signs admin session cookies (openssl rand -hex 32)
+#   ADMIN_BOOTSTRAP_PASSWORD - first admin password (only used while no admin exists)
+#   CORS_ALLOW_ORIGINS     - the exact browser origin(s) of the UI, e.g. https://cortex.example.com
+#
+# Image tags default to versions.env; `make` exports that file. Nothing here uses `latest`.
+# The gateway and frontend bind to the host network / a host port; put a TLS reverse proxy
+# (Caddy example in the docs) in front and expose ONLY that.
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "50m", max-file: "5" }
+
 services:
   postgres:
-    image: postgres:16
+    <<: [*restart, *logging]
+    image: ${POSTGRES_IMAGE:-postgres:16}
     environment:
-      POSTGRES_USER: cortex
-      POSTGRES_PASSWORD: cortex
-      POSTGRES_DB: cortex
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U cortex"], interval: 5s, timeout: 5s, retries: 10 }
+      POSTGRES_USER: ${POSTGRES_USER:-cortex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cortex}
+      POSTGRES_DB: ${POSTGRES_DB:-cortex}
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cortex}"], interval: 5s, timeout: 5s, retries: 10 }
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Expose to localhost for gateway (host network mode) to connect
     ports:
       - "127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}:5432"
+    deploy:
+      resources:
+        limits: { memory: "${POSTGRES_MEM_LIMIT:-2g}" }
 
   redis:
-    image: redis:7
+    <<: [*restart, *logging]
+    image: ${REDIS_IMAGE:-redis:7}
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-512mb}", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10 }
     volumes:
       - redis_data:/data
-    # Expose to localhost for gateway (host network mode) to connect
     ports:
       - "127.0.0.1:${CORTEX_REDIS_PORT:-16379}:6379"
+    deploy:
+      resources:
+        limits: { memory: "${REDIS_MEM_LIMIT:-768m}" }
 
   gateway:
-    image: your-registry/cortex-gateway:latest
-    # =========================================================================
-    # HOST NETWORK MODE - Universal External Access
-    # =========================================================================
-    # Using host network mode allows ANY Docker container or external application
-    # to reach the Cortex API at http://<HOST_IP>:8084 or http://host.docker.internal:8084
-    # without requiring manual network configuration.
-    # =========================================================================
+    <<: [*restart, *logging]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: cortex-gateway:${CORTEX_VERSION:-0.2.0}
     network_mode: host
-    env_file:
-      - ./backend/.env.prod
     environment:
-      VLLM_GEN_URLS: ""
-      VLLM_EMB_URLS: ""
-      INTERNAL_VLLM_API_KEY: ${INTERNAL_VLLM_API_KEY}
+      # --- auth ---
       GATEWAY_DEV_ALLOW_ALL_KEYS: "false"
-      CORTEX_MODELS_DIR: ${CORTEX_MODELS_DIR:-/var/cortex/models}
-      HF_CACHE_DIR: ${HF_CACHE_DIR:-/var/cortex/hf-cache}
-      # Keep in sync with backend/src/config.py and scripts/prepare-offline-deployment.sh
-      # NOTE: Qwen3 requires newer Transformers, so default to a compatible image.
-      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
-      # Database and Redis URLs - use localhost since gateway is on host network
-      DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/cortex
+      INTERNAL_VLLM_API_KEY: ${INTERNAL_VLLM_API_KEY:?set INTERNAL_VLLM_API_KEY (openssl rand -hex 32)}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (openssl rand -hex 32)}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-8}
+      # true when the UI is served over https (reverse proxy); the cookie is then https-only
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?set ADMIN_BOOTSTRAP_PASSWORD}
+      ADMIN_BOOTSTRAP_ORG: ${ADMIN_BOOTSTRAP_ORG:-Default}
+      # --- CORS: with a single-origin reverse proxy this is just that origin ---
+      CORS_ENABLED: "true"
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:?set CORS_ALLOW_ORIGINS to the UI origin, e.g. https://cortex.example.com}
+      SECURITY_HEADERS_ENABLED: "true"
+      # --- limits ---
+      REQUEST_MAX_BODY_BYTES: ${REQUEST_MAX_BODY_BYTES:-8388608}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-10}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-20}
+      CONCURRENCY_LIMIT_ENABLED: ${CONCURRENCY_LIMIT_ENABLED:-true}
+      MAX_CONCURRENT_STREAMS_PER_ID: ${MAX_CONCURRENT_STREAMS_PER_ID:-5}
+      # --- static upstream pools (optional) ---
+      VLLM_GEN_URLS: ${VLLM_GEN_URLS:-}
+      VLLM_EMB_URLS: ${VLLM_EMB_URLS:-}
+      # --- storage ---
+      CORTEX_MODELS_DIR: /var/cortex/models
+      HF_CACHE_DIR: /var/cortex/hf-cache
+      CORTEX_EXPORT_DIR: /var/cortex/exports
+      CORTEX_EXPORT_DIR_HOST: ${CORTEX_EXPORT_DIR:-/var/cortex/exports}
+      # Transfer drives (USB/NAS) mounted on the host under /media, /mnt or /run/media are visible
+      # to the Deployment page through these bind mounts (see volumes below)
+      CORTEX_TRANSFER_DIRS: /var/cortex/exports,/host/media,/host/mnt,/host/run/media
+      CORTEX_VERSION: ${CORTEX_VERSION:-0.2.0}
+      CORTEX_INFRA_IMAGES: ${POSTGRES_IMAGE:-postgres:16},${REDIS_IMAGE:-redis:7},${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1},${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2},${DCGM_EXPORTER_IMAGE:-nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04},${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:v0.49.2}
+      CORTEX_MODELS_DIR_HOST: ${CORTEX_MODELS_DIR:-/var/cortex/models}
+      HF_CACHE_DIR_HOST: ${HF_CACHE_DIR:-/var/cortex/hf-cache}
+      # --- engine images (defaults = versions.env = backend/src/config.py) ---
+      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:v0.28.0}
+      LLAMACPP_IMAGE: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda-b10731}
+      OFFLINE_MODE: ${OFFLINE_MODE:-false}
+      REQUIRE_IMAGE_PRECACHE: ${REQUIRE_IMAGE_PRECACHE:-false}
+      # --- lifecycle ---
+      STOP_MODELS_ON_SHUTDOWN: ${STOP_MODELS_ON_SHUTDOWN:-false}
+      MODEL_RECONCILE_SEC: ${MODEL_RECONCILE_SEC:-15}
+      # --- infra ---
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cortex}:${POSTGRES_PASSWORD:-cortex}@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/${POSTGRES_DB:-cortex}
       REDIS_URL: redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0
-    # Note: 'ports' is not used with network_mode: host - gateway listens on host port 8084 directly
-    depends_on: [redis, postgres]
+      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-9090}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8084/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${CORTEX_MODELS_DIR:-/var/cortex/models}:/var/cortex/models:ro
+      - ${CORTEX_MODELS_DIR:-/var/cortex/models}:/var/cortex/models:rw
       - ${HF_CACHE_DIR:-/var/cortex/hf-cache}:/var/cortex/hf-cache
-      # Persist Deployment exports (manifests/images/db dumps) on host
       - ${CORTEX_EXPORT_DIR:-/var/cortex/exports}:/var/cortex/exports
+      # Host mount points for transfer drives (bundles are read from / written to these)
+      - /media:/host/media
+      - /mnt:/host/mnt
+      - /run/media:/host/run/media
+    deploy:
+      resources:
+        limits: { memory: "${GATEWAY_MEM_LIMIT:-4g}", pids: 2048 }
+
+  frontend:
+    <<: [*restart, *logging]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+    image: cortex-frontend:${CORTEX_VERSION:-0.2.0}
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_HOST_IP: ${HOST_IP:-}
+    # Loopback by default: the reverse proxy is the only public listener. Set FRONTEND_BIND=0.0.0.0
+    # to serve the UI directly on the LAN without TLS (not recommended).
+    ports: ["${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3001}:3001"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      gateway: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: "${FRONTEND_MEM_LIMIT:-1g}" }
+
+  prometheus:
+    <<: [*restart, *logging]
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:${PROM_PORT:-9090}:9090"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=${PROM_RETENTION:-15d}"
+      - "--storage.tsdb.retention.size=${PROM_RETENTION_SIZE:-10GB}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: "${PROM_MEM_LIMIT:-2g}" }
+
+  node-exporter:
+    <<: [*restart, *logging]
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2}
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports: ["127.0.0.1:${NODE_EXPORTER_PORT:-9100}:9100"]
+    profiles: ["linux"]
+    deploy:
+      resources:
+        limits: { memory: 256m }
+
+  dcgm-exporter:
+    <<: [*restart, *logging]
+    image: ${DCGM_EXPORTER_IMAGE:-nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04}
+    deploy:
+      resources:
+        limits: { memory: 1g }
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+    runtime: nvidia
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports: ["127.0.0.1:${DCGM_PORT:-9400}:9400"]
+    profiles: ["gpu"]
+
+  cadvisor:
+    <<: [*restart, *logging]
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:v0.49.2}
+    privileged: true
+    ports: ["127.0.0.1:${CADVISOR_PORT:-8085}:8080"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    profiles: ["linux"]
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  # pgadmin is intentionally absent from production. Use `make db-shell` or the dev
+  # compose `tools` profile on an operator workstation.
 
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:

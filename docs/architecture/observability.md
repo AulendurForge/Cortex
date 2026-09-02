@@ -1,43 +1,80 @@
 # Observability
 
-CORTEX exposes Prometheus metrics and optionally OpenTelemetry traces.
+Prometheus scrapes the gateway, the host/GPU/container exporters and **every running model
+container**; the gateway reads Prometheus back (`PROMETHEUS_URL`) for the System Monitor page.
+Configuration: `infra/prometheus/prometheus.yml`.
 
-## Prometheus metrics
+## Scrape topology
+
+| Job | Target | How it is reached |
+|---|---|---|
+| `gateway` | `host.docker.internal:8084/metrics` | the gateway is on the host network; compose adds `host.docker.internal:host-gateway` to Prometheus |
+| `cortex-models` | `host.docker.internal:8084/engine-metrics/<model_id>` | **HTTP service discovery** (`http_sd_configs` → `GET /prometheus/sd` on the gateway, one target per running model); the gateway proxies each engine's `/metrics` with the internal API key because engines listen on loopback and require it. Labels `model_id`, `served_model_name`, `engine`, `container`. Prometheus needs no Docker socket. |
+| `node-exporter` | `node-exporter:9100` | compose network; `linux` profile |
+| `dcgm-exporter` | `dcgm-exporter:9400` | compose network; `gpu` profile |
+| `cadvisor` | `cadvisor:8080` | compose network (host loopback `8085`); `linux` profile |
+
+Model containers need no static configuration: the gateway labels each container it starts
+(`cortex.managed=1`, `cortex.model_id=<id>`, `cortex.engine=vllm|llamacpp`) and joins it to
+`cortex_default`; Prometheus picks it up within `refresh_interval` (15 s) and drops it when it
+stops. Both engines expose Prometheus text on port 8000 (`--metrics` is always passed to
+llama-server). Check `http://<host>:<PROM_PORT>/targets` or `make monitoring-status`.
+
+Prometheus's own port defaults to `9090` (`PROM_PORT`); Cockpit and other tools also use
+9090, so set `PROM_PORT=9094` in `.env` if needed - the gateway's `PROMETHEUS_URL` follows.
+Retention: `PROM_RETENTION` (7d dev, 15d + `PROM_RETENTION_SIZE=10GB` prod).
+
+## Gateway metrics (`/metrics`)
+
 From `backend/src/metrics.py`:
-- `gateway_requests_total{route,status}` — request counts
-- `gateway_request_latency_seconds{route}` — request latencies (histogram)
-- `gateway_upstream_latency_seconds{path}` — upstream call latency
-- `gateway_upstream_latency_by_upstream_seconds{path,base_url}` — latency per upstream
-- `gateway_stream_ttft_seconds{path}` — time-to-first-token for streaming
-- `gateway_upstream_selected_total{path,base_url}` — selection counts
-- `gateway_key_auth_allowed_total{reason}` / `gateway_key_auth_blocked_total{reason}` — auth decisions
-- `gateway_upstream_health{base_url}` — health poller status (gauge)
 
-vLLM exporters and node/DCGM exporters can be scraped for GPU and host metrics.
+- `gateway_requests_total{route,status}`
+- `gateway_request_latency_seconds{route}` (histogram)
+- `gateway_upstream_latency_seconds{path}`, `gateway_upstream_latency_by_upstream_seconds{path,base_url}`
+- `gateway_stream_ttft_seconds{path}` - time to first token for streams
+- `gateway_upstream_selected_total{path,base_url}`
+- `gateway_key_auth_allowed_total{reason}`, `gateway_key_auth_blocked_total{reason}`
+- `gateway_timeout_errors_total`, `gateway_request_cancellations_total`, `gateway_upstream_health_degradation_total`
+- `cortex_model_start_total`, `cortex_model_start_seconds` (histogram), `cortex_model_state_transitions_total` - model lifecycle
 
-## Per-Model vLLM Metrics
+## Engine metrics
 
-The gateway aggregates metrics from running vLLM containers:
+vLLM (`vllm:` prefix): `num_requests_running`, `num_requests_waiting`,
+`prompt_tokens_total`, `generation_tokens_total`, `time_to_first_token_seconds`,
+`kv_cache_usage_perc`. llama.cpp (`llamacpp:` prefix, `--metrics` is passed when
+`LLAMACPP_METRICS_ENABLED=true`, the default): `prompt_tokens_total`, `tokens_predicted_total`,
+`kv_cache_usage_ratio`, `requests_processing`, `requests_deferred`. The gateway aggregates the important ones per model
+at `GET /admin/models/metrics` (admin session) for the **System Monitor → Active Models**
+panel; it queries the engines directly, so it works even when Prometheus is down.
 
-**Endpoint:** `GET /admin/models/metrics`
+## Host and GPU metrics
 
-**Available Metrics:**
-| Metric | Description |
-|--------|-------------|
-| `num_requests_running` | Active inference requests |
-| `num_requests_waiting` | Queued requests |
-| `num_requests_swapped` | Requests swapped to CPU |
-| `prompt_tokens_total` | Total input tokens processed |
-| `completion_tokens_total` | Total output tokens generated |
-| `time_to_first_token_seconds_sum/count` | TTFT latency metrics |
-| `gpu_cache_usage_perc` | KV cache memory utilization |
+- node-exporter: CPU, memory, disk, network of the host (`--path.*` mounted from `/host`).
+- dcgm-exporter: GPU utilization, memory, temperature, power (`DCGM_FI_DEV_*`); needs the
+  NVIDIA runtime.
+- cAdvisor: per-container CPU/memory/network, including model containers.
+- The gateway's `GET /admin/system/gpus` uses NVML directly when the NVIDIA libraries are
+  visible to it (the compose service sets `NVIDIA_VISIBLE_DEVICES=all` but does not require the
+  NVIDIA runtime); without them the endpoint reports an empty list and the page falls back to
+  DCGM data from Prometheus.
 
-**Frontend Access:**
-Admin UI → System Monitor → "🤖 Active Models" accordion section
+## Health
+
+- `GET /health` on the gateway: liveness (used by the compose healthcheck).
+- `GET /admin/models/{id}/readiness`: `status` = `stopped` / `loading` (+ `detail`) / `ready` /
+  `error` (+ `detail` = `state_reason`) per model; the supervisor updates `state` from the same probe every `MODEL_RECONCILE_SEC`.
+- Compose healthchecks on postgres (`pg_isready`), redis (`PING`), gateway (`/health`),
+  prometheus (`/-/ready`), frontend (`/login`, prod).
+
+## Tracing and logs
+
+- OpenTelemetry is optional: `OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_SERVICE_NAME`; spans cover FastAPI and httpx upstream calls.
+- Logs go to stdout (json-file driver, rotated in prod); every request carries an
+  `X-Request-ID` echoed in the response. See the [runbooks](../operations/runbooks.md#where-the-logs-are).
 
 ## Dashboards
-- Provide Grafana dashboards for gateway KPIs (latency, errors, selection, TTFT) and system metrics.
-- System Monitor page provides real-time views of host, GPU, and model metrics
 
-## Tracing (optional)
-- Enable OTel via env; spans propagated through FastAPI and httpx when configured.
+No Grafana ships with Cortex. The System Monitor page covers day-to-day needs; for Grafana,
+point it at `http://<host>:<PROM_PORT>` and start from the vLLM and node-exporter community
+dashboards, filtering model panels by the `model_id` / `engine` labels above.

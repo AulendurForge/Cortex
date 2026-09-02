@@ -1,35 +1,56 @@
 #!/usr/bin/env bash
+# Post-deploy smoke test through the gateway with a REAL API key.
+#
+#   CORTEX_API_KEY=<key> MODEL=<served model name> bash scripts/smoke.sh
+#   BASE=http://host:8084   (default http://127.0.0.1:8084)
+#   EMBED_MODEL=<served embedding model>  (optional; embeddings step skipped when unset)
+#
+# Create a key in the UI (API Keys) or with `make login && make create-key`.
 set -euo pipefail
 
-BASE=${BASE:-http://localhost:8084}
-AUTH=${AUTH:-"Bearer dev-any"}
+BASE=${BASE:-http://127.0.0.1:8084}
+KEY=${CORTEX_API_KEY:-}
+MODEL=${MODEL:-}
+EMBED_MODEL=${EMBED_MODEL:-}
 
-echo "[1/5] HEALTH" >&2
-curl -sS "$BASE/health" | cat
-echo
+if [ -z "$KEY" ]; then
+    echo "CORTEX_API_KEY is required (a real key; the gateway rejects unknown tokens in production)." >&2
+    exit 2
+fi
 
-echo "[2/5] ADMIN/UPSTREAMS" >&2
-curl -sS "$BASE/admin/upstreams" | cat
-echo
+step() { echo "" >&2; echo "== $*" >&2; }
 
-echo "[3/5] EMBEDDINGS" >&2
-curl -sS -X POST "$BASE/v1/embeddings" \
-  -H "content-type: application/json" \
-  -H "authorization: $AUTH" \
-  -d '{"model":"intfloat/e5-small-v2","input":"hello"}' | cat
-echo
+step "GET /health"
+curl -fsS "$BASE/health"; echo
 
-echo "[4/5] CHAT COMPLETIONS" >&2
-curl -sS -X POST "$BASE/v1/chat/completions" \
-  -H "content-type: application/json" \
-  -H "authorization: $AUTH" \
-  -d '{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","messages":[{"role":"user","content":"ping"}],"stream":false}' | cat
-echo
+step "GET /v1/models"
+MODELS=$(curl -fsS -H "Authorization: Bearer $KEY" "$BASE/v1/models")
+echo "$MODELS" | head -c 600; echo
+if [ -z "$MODEL" ]; then
+    MODEL=$(echo "$MODELS" | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)
+    [ -n "$MODEL" ] && echo "(using first model: $MODEL)" >&2
+fi
 
-echo "[5/5] METRICS SAMPLE" >&2
-curl -sS "$BASE/metrics" | head -n 40 | cat
-echo
+if [ -n "$MODEL" ]; then
+    step "POST /v1/chat/completions ($MODEL)"
+    curl -fsS -X POST "$BASE/v1/chat/completions" \
+      -H "Content-Type: application/json" -H "Authorization: Bearer $KEY" \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: pong\"}],\"max_tokens\":8,\"stream\":false}"
+    echo
+else
+    echo "No running model; skipping chat completion." >&2
+fi
 
-echo "Smoke tests completed." >&2
+if [ -n "$EMBED_MODEL" ]; then
+    step "POST /v1/embeddings ($EMBED_MODEL)"
+    curl -fsS -X POST "$BASE/v1/embeddings" \
+      -H "Content-Type: application/json" -H "Authorization: Bearer $KEY" \
+      -d "{\"model\":\"$EMBED_MODEL\",\"input\":\"hello\"}" | head -c 300
+    echo
+fi
 
+step "GET /metrics (sample)"
+curl -fsS "$BASE/metrics" | grep -E '^gateway_requests_total' | head -n 5 || true
 
+echo "" >&2
+echo "Smoke test passed." >&2

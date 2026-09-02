@@ -27,7 +27,7 @@ export default function GuidePage() {
             { id: 'about-usage', label: '📊 Usage Analytics', content: <AboutUsage /> },
             { id: 'manage-users-orgs', label: '👥 Users & Orgs', content: <ManageUsersOrgs /> },
             { id: 'chat-playground', label: '💬 Chat', content: <ChatPlayground /> },
-            { id: 'deployment-migration', label: '📦 Deployment', content: <DeploymentMigration /> },
+            { id: 'deployment-migration', label: '📦 Transfer', content: <DeploymentMigration /> },
             { id: 'about-cortex', label: '🧠 About Cortex', content: <AboutCortex /> },
           ]}
         />

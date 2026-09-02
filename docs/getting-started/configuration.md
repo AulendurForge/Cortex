@@ -1,92 +1,112 @@
 # Configuration
 
-CORTEX is configured primarily via environment variables. Defaults are defined in `backend/src/config.py`.
+Cortex is configured with environment variables. Defaults live in `backend/src/config.py`;
+the compose files set the deployment-specific ones, and `.env` in the repository root (copied
+from `.env.example`) overrides them for both `make` and `docker compose`. `backend/.env` is read
+only when the gateway runs outside Docker (`backend/.env.example`).
 
-> Tip: create a `.env` file in `backend/` for local overrides.
+Image tags are **not** configured here: they come from `versions.env`
+([see Operations → Offline deployment](../operations/offline-deployment.md#pinned-images)).
 
-## Core settings
+## Gateway settings
 
 | Variable | Default | Description |
 |---|---|---|
-| `VLLM_GEN_URLS` | `http://localhost:8001` | Comma-separated base URLs for generation pool |
-| `VLLM_EMB_URLS` | `http://localhost:8002` | Comma-separated base URLs for embeddings pool |
-| `INTERNAL_VLLM_API_KEY` | `` | Token used by gateway to call private vLLM upstreams |
-| `GATEWAY_DEV_ALLOW_ALL_KEYS` | `True` | Dev bypass for API key auth (set to `False` in prod) |
-| `REQUEST_MAX_BODY_BYTES` | `1048576` | Max request size (bytes); 413 if exceeded |
-| `RATE_LIMIT_ENABLED` | `False` | Enable rate limit checks (Redis required) |
-| `RATE_LIMIT_RPS` | `10` | Requests per second allowed per identifier |
-| `RATE_LIMIT_BURST` | `20` | Additional burst per second |
-| `RATE_LIMIT_WINDOW_SEC` | `0` | Sliding window length (0 disables) |
-| `RATE_LIMIT_MAX_REQUESTS` | `0` | Max requests within sliding window |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis connection URL |
-| `CONCURRENCY_LIMIT_ENABLED` | `False` | Limit concurrent streams per identifier |
-| `MAX_CONCURRENT_STREAMS_PER_ID` | `5` | Max concurrent streaming requests |
-| `CB_ENABLED` | `False` | Enable circuit breaker |
-| `CB_FAILURE_THRESHOLD` | `5` | Failures before opening breaker |
-| `CB_COOLDOWN_SEC` | `30` | Cooldown period after breaker trips |
-| `HEALTH_CHECK_TTL_SEC` | `10` | Health snapshot TTL used in routing |
-| `HEALTH_CHECK_PATH` | `/health` | Upstream health path |
-| `HEALTH_POLL_SEC` | `15` | Background health poll cadence |
-| `OTEL_ENABLED` | `False` | Enable OpenTelemetry tracing |
-| `OTEL_SERVICE_NAME` | `cortex-gateway` | OTel service.name |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `` | OTLP HTTP endpoint |
-| `TOKEN_ESTIMATION_ENABLED` | `True` | Estimate token counts when upstream doesn’t return usage |
-| `PROMETHEUS_URL` | `http://prometheus:9090` | Prometheus base URL |
-| `CORS_ENABLED` | `True` | Enable CORS middleware |
-| `CORS_ALLOW_ORIGINS` | `http://localhost:3001` | Allowed origins (comma-separated or `*`) |
-| `SECURITY_HEADERS_ENABLED` | `True` | Add secure headers on responses |
-| `DATABASE_URL` | `postgresql+asyncpg://cortex:cortex@postgres:5432/cortex` | Async SQLAlchemy URL |
-| `ADMIN_BOOTSTRAP_USERNAME` | `` | Optional owner bootstrap username |
-| `ADMIN_BOOTSTRAP_PASSWORD` | `` | Optional owner bootstrap password |
-| `ADMIN_BOOTSTRAP_ORG` | `` | Optional org name on bootstrap |
-| `CORTEX_MODELS_DIR` | `/var/cortex/models` | Container-visible models directory |
-| `HF_CACHE_DIR` | `/var/cortex/hf-cache` | Container-visible Hugging Face cache |
-| `CORTEX_MODELS_DIR_HOST` | same as `CORTEX_MODELS_DIR` | Host path for models (Docker bind) |
-| `HF_CACHE_DIR_HOST` | same as `HF_CACHE_DIR` | Host path for HF cache (Docker bind) |
-| `VLLM_IMAGE` | `vllm/vllm-openai:latest` | Image used for managed model containers (for offline reproducibility, pin to a tested tag and cache it via `make prepare-offline`) |
+| `INTERNAL_VLLM_API_KEY` | `""` | Shared secret passed as `--api-key` to every model container (both engines). **Required in prod.** |
+| `GATEWAY_DEV_ALLOW_ALL_KEYS` | `false` | Accept any bearer token on `/v1`. Dev compose sets `true`. |
+| `SESSION_SECRET` | `""` | HMAC key for admin session cookies; auto-generated and stored in `config_kv` when empty. **Set explicitly in prod.** |
+| `SESSION_TTL_HOURS` | `8` | Admin session lifetime. |
+| `SESSION_COOKIE_SECURE` | `false` | Send the session cookie only over https. `true` behind TLS. |
+| `ADMIN_BOOTSTRAP_USERNAME` / `_PASSWORD` / `_ORG` | `""` | Create the first admin at startup while no admin exists. |
+| `CORS_ENABLED` | `true` | Enable the CORS middleware. |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:3001,http://127.0.0.1:3001` | Comma-separated browser origins allowed with credentials. Never `*` in prod. |
+| `SECURITY_HEADERS_ENABLED` | `true` | `X-Content-Type-Options`, `X-Frame-Options`, etc. (no HSTS; the proxy adds it). |
+| `REQUEST_MAX_BODY_BYTES` | `1048576` | 413 above this (compose: 8 MiB). |
+| `DATABASE_URL` | `postgresql+asyncpg://cortex:cortex@postgres:5432/cortex` | Async SQLAlchemy URL. Compose uses `127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}` (host network). |
+| `REDIS_URL` | `redis://redis:6379/0` | Compose: `redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0`. |
+| `PROMETHEUS_URL` | `http://prometheus:9090` | Compose: `http://127.0.0.1:${PROM_PORT:-9090}`. |
 
-## vLLM Container Environment Variables
+## Limits and resilience
 
-These are automatically set by Cortex when starting vLLM containers based on model configuration:
+| Variable | Default | Description |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | `false` | Redis token bucket per key (prod compose: `true`). |
+| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `10` / `20` | Sustained rate and burst. |
+| `RATE_LIMIT_WINDOW_SEC` / `RATE_LIMIT_MAX_REQUESTS` | `0` / `0` | Optional sliding window (0 = off). |
+| `CONCURRENCY_LIMIT_ENABLED` | `false` | Cap concurrent streams per key (prod: `true`). |
+| `MAX_CONCURRENT_STREAMS_PER_ID` | `5` | The cap. |
+| `CB_ENABLED` | `false` | Circuit breaker per upstream. |
+| `CB_FAILURE_THRESHOLD` / `CB_COOLDOWN_SEC` | `5` / `30` | Failures before opening; cooldown. |
+| `CB_TIMEOUT_THRESHOLD` / `CB_TIMEOUT_COOLDOWN` / `CB_HEALTH_CHECK_INTERVAL` | `3` / `60` / `10` | Timeout-surge breaker. |
+| `HEALTH_CHECK_TTL_SEC` | `30` | How long an upstream health snapshot is valid. |
+| `HEALTH_CHECK_PATH` | `/health` | Upstream health path. |
+| `HEALTH_POLL_SEC` | `10` | Background health poll interval (0 = off). |
+| `TOKEN_ESTIMATION_ENABLED` | `true` | Estimate usage when the engine omits it. |
 
-| Variable | Description |
+## Models, engines and lifecycle
+
+| Variable | Default | Description |
+|---|---|---|
+| `CORTEX_MODELS_DIR` | `/var/cortex/models` | Models directory **inside the gateway container**. |
+| `HF_CACHE_DIR` | `/var/cortex/hf-cache` | HF cache inside the container. |
+| `CORTEX_EXPORT_DIR` | `/var/cortex/exports` | Deployment exports inside the container. |
+| `CORTEX_MODELS_DIR_HOST` / `HF_CACHE_DIR_HOST` | same as container path | **Host** paths bind-mounted into model containers (compose passes them). |
+| `VLLM_IMAGE` | `vllm/vllm-openai:v0.28.0` | Default vLLM image (CUDA 13, driver >= 580; `v0.28.0-cu129` for 550-579). |
+| `LLAMACPP_IMAGE` | `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` | Default llama.cpp image. |
+| `OFFLINE_MODE` | `false` | Never pull images; fail fast when one is missing. |
+| `OFFLINE_MODE_AUTO_DETECT` | `true` | Treat the host as offline when the registry is unreachable. |
+| `REQUIRE_IMAGE_PRECACHE` | `false` | Strict: refuse to start a model whose image is not cached. |
+| `IMAGE_PULL_TIMEOUT` | `600` | Seconds allowed for a pull. |
+| `VLLM_STARTUP_TIMEOUT` / `LLAMACPP_STARTUP_TIMEOUT` | `600` / `300` | Default `startup_timeout_sec` per engine. |
+| `LLAMACPP_SERVER_TIMEOUT` | `300` | Per-request timeout passed to llama-server. |
+| `LLAMACPP_METRICS_ENABLED` / `LLAMACPP_SLOTS_ENABLED` / `LLAMACPP_LOG_TIMESTAMPS` | `true` | `--metrics`, `--slots`, `--log-timestamps`. |
+| `STOP_MODELS_ON_SHUTDOWN` | `false` | Stop managed containers when the gateway exits (default: leave them; the supervisor re-adopts them). |
+| `MODEL_RECONCILE_SEC` | `15` | Supervisor loop: DB state vs containers vs registry. |
+| `VLLM_GEN_URLS` / `VLLM_EMB_URLS` / `LLAMACPP_GEN_URLS` | `http://localhost:8001` / `:8002` / `""` | **Optional** static upstream pools for engines you run yourself. Compose sets them empty; managed models register themselves. |
+
+Removed in 0.2: `LLAMACPP_DEFAULT_NGL`, `LLAMACPP_DEFAULT_BATCH_SIZE`, `LLAMACPP_DEFAULT_UBATCH_SIZE`,
+`LLAMACPP_DEFAULT_THREADS`, `LLAMACPP_DEFAULT_CONTEXT`, `LLAMACPP_MAX_PARALLEL`,
+`LLAMACPP_CONT_BATCHING`, `LLAMACPP_CACHE_TYPE_K/V`, `LLAMACPP_LOG_VERBOSE`, `LLAMACPP_LOG_COLORS`,
+`LLAMACPP_CHECK_TENSORS`, `LLAMACPP_SKIP_WARMUP`, `LLAMACPP_JINJA_ENABLED`, `LLAMACPP_DEFRAG_THOLD`,
+`VLLM_USE_V1`. Configure these per model ([llama.cpp guide](../models/llamaCPP.md)).
+
+## Observability
+
+| Variable | Default | Description |
+|---|---|---|
+| `OTEL_ENABLED` | `false` | OpenTelemetry tracing. |
+| `OTEL_SERVICE_NAME` | `cortex-gateway` | |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | OTLP HTTP endpoint. |
+
+## Compose-level variables (root `.env`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOST_IP` | detected by `scripts/detect-ip.sh` | LAN IP used for CORS and printed URLs. |
+| `CORTEX_MODELS_DIR` / `HF_CACHE_DIR` / `CORTEX_EXPORT_DIR` | `/var/cortex/...` | Host directories to mount. |
+| `FRONTEND_PORT` | `3001` | UI port. |
+| `PROM_PORT` | `9090` | Prometheus port (`9094` if Cockpit owns 9090). |
+| `PROM_RETENTION` | `7d` / `15d` | Prometheus retention. |
+| `CORTEX_POSTGRES_PORT` / `CORTEX_REDIS_PORT` | `15432` / `16379` | Loopback ports for Postgres and Redis. |
+| `NODE_EXPORTER_PORT` / `DCGM_PORT` / `CADVISOR_PORT` | `9100` / `9400` / `8085` | Exporter loopback ports. |
+| `COMPOSE_PROFILES` | auto via make | `linux` (node-exporter, cadvisor), `gpu` (dcgm), `tools` (pgadmin, dev only). |
+| `CORTEX_RUN_AS_ROOT` | `false` | Skip the gateway's privilege drop (debug only). |
+| `*_MEM_LIMIT`, `REDIS_MAXMEMORY`, `FRONTEND_BIND` | see prod compose | Prod resource limits and UI bind address. |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `cortex` | Prod database credentials. |
+
+## Model containers
+
+What Cortex sets on every engine container (not configurable):
+
+| Env / flag | Value |
 |---|---|
-| `CUDA_VISIBLE_DEVICES` | GPU selection (set from model's `selected_gpus`) |
-| `HF_HUB_OFFLINE` | Set to `1` when `offline_mode` is enabled |
-| `VLLM_USE_V1` | Set to `1` when V1 engine is enabled |
-| `VLLM_LOGGING_LEVEL` | Set to `DEBUG` when debug logging is enabled |
-| `VLLM_TRACE_FUNCTION` | Set to `1` when trace mode is enabled |
-| `VLLM_ENGINE_ITERATION_TIMEOUT_S` | Request timeout in seconds (if configured) |
-| `NCCL_TIMEOUT` | Multi-GPU communication timeout (default: 1800) |
-| `NCCL_DEBUG` | Set to `WARN` for multi-GPU setups |
-| `NCCL_BLOCKING_WAIT` | Set to `1` for blocking NCCL operations |
-| `NCCL_LAUNCH_MODE` | Set to `PARALLEL` for optimal multi-GPU performance |
+| `NVIDIA_VISIBLE_DEVICES` | from `selected_gpus` (`void` for CPU models) |
+| `HF_HUB_OFFLINE=1` | offline-mode models |
+| `HF_TOKEN` | the model's `hf_token`, vLLM only |
+| `--api-key` | `INTERNAL_VLLM_API_KEY` |
+| `--host 0.0.0.0 --port 8000`, published on `127.0.0.1:<random>` | |
+| labels `cortex.managed=1`, `cortex.model_id`, `cortex.engine` | |
 
-## Security guidance
-- In production, set `GATEWAY_DEV_ALLOW_ALL_KEYS=false` and configure API keys.
-- Restrict `CORS_ALLOW_ORIGINS` to the actual frontend origins; avoid `*` with credentials.
-- Use strong `INTERNAL_VLLM_API_KEY` when upstreams are network-reachable.
-
-## Compose profiles
-- `linux` enables the node-exporter; `gpu` enables the DCGM exporter and requests GPU access for containers that need it.
-- Enable per command or via env:
-```bash
-# one-off
-docker compose -f docker.compose.dev.yaml --profile linux --profile gpu up -d
-
-# persistent for the shell
-export COMPOSE_PROFILES=linux,gpu
-docker compose -f docker.compose.dev.yaml up -d
-```
-
-## CORS notes (dev)
-- When the UI runs at `http://localhost:3001`, ensure the gateway allows that origin:
-```
-CORS_ALLOW_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
-```
-- Preflight check (should return Access-Control-Allow-Origin):
-```bash
-curl -i -X OPTIONS http://localhost:8084/auth/login \
-  -H 'Origin: http://localhost:3001' \
-  -H 'Access-Control-Request-Method: POST'
-```
+Everything else is per-model configuration: see the [vLLM](../models/vllm.md) and
+[llama.cpp](../models/llamaCPP.md) guides and
+[Setting custom environment variables](../models/setting-custom-env-vars.md).

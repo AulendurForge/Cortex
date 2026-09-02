@@ -2,67 +2,56 @@
 
 import React from 'react';
 import apiFetch from '../../lib/api-clients';
+import { useGpus } from '../../hooks/useGpus';
+import { useBaseDir } from '../../hooks/useModelSource';
 import { Card, Button, Input, Select, SectionTitle, InfoBox, FormField, Badge } from '../UI';
 import { Modal } from '../Modal';
-import { bytesToGiB, breakdownMemory, recommendGpuMemoryUtilization, type HardwareSnapshot, type ModelMeta, type Workload, type Choices } from '../../lib/model-math';
+import { NumberField } from '../NumberField';
+import { bytesToGiB, breakdownMemory, recommendGpuMemoryUtilization, type HardwareSnapshot, type ModelMeta, type Workload, type Choices, type Quantization, type KvDtype, type Precision } from '../../lib/model-math';
 import { Tooltip } from '../Tooltip';
 import { cn } from '../../lib/cn';
 
 export type CalculatorResult = {
   applied: boolean;
   values: Partial<{
+    engine_type: 'vllm';
+    selected_gpus: number[];
     tp_size: number;
-    dtype: 'auto' | 'bfloat16' | 'float16';
-    quantization: '' | 'awq' | 'gptq' | 'fp8' | 'int8';
-    kv_cache_dtype: '' | 'fp8' | 'fp8_e4m3' | 'fp8_e5m2';
+    dtype: Precision;
+    quantization: Quantization | undefined;
+    kv_cache_dtype: KvDtype | undefined;
     gpu_memory_utilization: number;
     max_model_len: number;
     max_num_batched_tokens: number;
     block_size: number;
     cpu_offload_gb: number;
-    swap_space_gb: number;
   }>;
 };
 
+type HfConfigResp = { params_b?: number | null; hidden_size?: number | null; num_hidden_layers?: number | null };
+
 export function ResourceCalculatorModal({ open, onClose, onApply }: { open: boolean; onClose: () => void; onApply: (r: CalculatorResult) => void; }) {
-  const [loading, setLoading] = React.useState<boolean>(false);
-  const [hw, setHw] = React.useState<HardwareSnapshot | null>(null);
+  const gpuQ = useGpus({ enabled: open });
+  const baseDirQ = useBaseDir(open);
+  const loading = gpuQ.isLoading;
+  const hw = React.useMemo<HardwareSnapshot | null>(() => (gpuQ.isLoading ? null : {
+    gpuCount: gpuQ.gpus.length,
+    gpus: gpuQ.gpus.map((g) => ({ index: g.index, name: g.name, mem_total_mb: g.mem_total_mb, mem_used_mb: g.mem_used_mb })),
+  }), [gpuQ.gpus, gpuQ.isLoading]);
   const [meta, setMeta] = React.useState<ModelMeta>({ paramsB: 7, hiddenSize: 4096, numLayers: 32 });
   const [work, setWork] = React.useState<Workload>({ seqLen: 8192, maxNumSeqs: 256, avgActiveTokens: 2048, maxBatchedTokens: 4096 });
   const [choices, setChoices] = React.useState<Choices>({ dtype: 'bfloat16', quantization: '', kvCacheDtype: '', tpSize: 1 });
   const [cpuOffloadGb, setCpuOffloadGb] = React.useState<number>(0);
-  const [swapSpaceGb, setSwapSpaceGb] = React.useState<number>(0);
   const [adjustments, setAdjustments] = React.useState<string[]>([]);
   const [repoId, setRepoId] = React.useState<string>("");
-  const [baseDir, setBaseDir] = React.useState<string>("");
   const [folder, setFolder] = React.useState<string>("");
   const [fetchingMeta, setFetchingMeta] = React.useState<boolean>(false);
+  const [metaError, setMetaError] = React.useState<string | null>(null);
+  const baseDir = baseDirQ.data ?? '';
 
   React.useEffect(() => {
-    if (!open) return;
-    let stop = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const gpus: any[] = await apiFetch('/admin/system/gpus');
-        const snapshot: HardwareSnapshot = {
-          gpuCount: Array.isArray(gpus) ? gpus.length : 0,
-          gpus: (Array.isArray(gpus) ? gpus : []).map((g: any) => ({ index: g.index, name: g.name, mem_total_mb: g.mem_total_mb, mem_used_mb: g.mem_used_mb })),
-        };
-        if (!stop) setHw(snapshot);
-        if (!stop && snapshot.gpuCount > 0) setChoices((c) => ({ ...c, tpSize: Math.min(2, snapshot.gpuCount) }));
-        try {
-          const r: any = await apiFetch('/admin/models/base-dir');
-          if (!stop && r?.base_dir) setBaseDir(r.base_dir);
-        } catch {}
-      } catch {
-        if (!stop) setHw({ gpuCount: 0, gpus: [] });
-      } finally {
-        if (!stop) setLoading(false);
-      }
-    })();
-    return () => { stop = true; };
-  }, [open]);
+    if (open && hw && hw.gpuCount > 0) setChoices((c) => ({ ...c, tpSize: Math.min(c.tpSize, hw.gpuCount) }));
+  }, [open, hw]);
 
   const presets: Array<{ id: string; label: string; meta: ModelMeta }> = [
     { id: 'custom', label: 'Custom', meta: meta },
@@ -81,18 +70,12 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
 
   const onFetchMeta = async () => {
     setFetchingMeta(true);
+    setMetaError(null);
     try {
-      if (repoId) {
-        const r: any = await apiFetch(`/admin/models/hf-config?repo_id=${encodeURIComponent(repoId)}`);
-        const next = { ...meta };
-        if (typeof r.params_b === 'number' && r.params_b > 0) next.paramsB = r.params_b;
-        if (typeof r.hidden_size === 'number' && r.hidden_size > 0) next.hiddenSize = r.hidden_size;
-        if (typeof r.num_hidden_layers === 'number' && r.num_hidden_layers > 0) next.numLayers = r.num_hidden_layers;
-        setMeta(next);
-        setPresetId('custom');
-      } else if (baseDir && folder) {
-        const q = new URLSearchParams({ base: baseDir, folder });
-        const r: any = await apiFetch(`/admin/models/inspect-folder?${q.toString()}`);
+      let r: HfConfigResp | null = null;
+      if (repoId) r = await apiFetch<HfConfigResp>(`/admin/models/hf-config?repo_id=${encodeURIComponent(repoId)}`);
+      else if (folder) r = await apiFetch<HfConfigResp>(`/admin/models/inspect-folder?${new URLSearchParams({ folder }).toString()}`);
+      if (r) {
         const next = { ...meta };
         if (typeof r.params_b === 'number' && r.params_b > 0) next.paramsB = r.params_b;
         if (typeof r.hidden_size === 'number' && r.hidden_size > 0) next.hiddenSize = r.hidden_size;
@@ -100,23 +83,25 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
         setMeta(next);
         setPresetId('custom');
       }
-    } catch {}
-    finally { setFetchingMeta(false); }
+    } catch (e) {
+      setMetaError((e as { message?: string })?.message || 'Could not fetch model metadata');
+    } finally { setFetchingMeta(false); }
   };
 
   const onApplyClick = () => {
     const util = recommendGpuMemoryUtilization();
     onApply({ applied: true, values: {
+      engine_type: 'vllm',
+      selected_gpus: Array.from({ length: choices.tpSize }, (_, i) => i),
       tp_size: choices.tpSize,
       dtype: choices.dtype,
-      quantization: choices.quantization,
-      kv_cache_dtype: choices.kvCacheDtype,
+      quantization: choices.quantization || undefined,
+      kv_cache_dtype: choices.kvCacheDtype || undefined,
       gpu_memory_utilization: util,
       max_model_len: work.seqLen,
       block_size: 16,
       max_num_batched_tokens: 2048,
       cpu_offload_gb: cpuOffloadGb > 0 ? Math.round(cpuOffloadGb) : 0,
-      swap_space_gb: swapSpaceGb > 0 ? Math.round(swapSpaceGb) : 0,
     }});
   };
 
@@ -133,7 +118,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
     if (anyOver) {
       items.push('Consider:');
       items.push('• Enable kv_cache_dtype=fp8');
-      items.push('• Use 4‑bit or int8 quantization');
+      items.push('• Use a 4-bit (AWQ/GPTQ) or FP8 checkpoint');
       items.push('• Lower max context or sequences');
       items.push('• Increase TP size');
     }
@@ -157,8 +142,8 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
       check = tryFits();
     }
     if (!check.ok && !c.quantization) {
-      c.quantization = 'int8';
-      notes.push('Enable int8 quantization');
+      c.quantization = 'fp8';
+      notes.push('Use FP8 quantization');
       check = tryFits();
     }
     if (!check.ok && c.quantization !== 'awq' && c.quantization !== 'gptq') {
@@ -202,18 +187,14 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
       check = tryFits();
     }
     let offload = 0;
-    let swap = 0;
     if (!check.ok) {
       const worst = Math.max(0, ...check.br.perGpu.map((p)=> (p.totalBytes - (p.vramFreeBytes || 0))));
       offload = worst > 0 ? Math.ceil(bytesToGiB(worst)) : 0;
-      if (offload > 0) notes.push(`Suggest offload ≈ ${offload} GiB`);
-      swap = offload > 0 ? Math.min(16, Math.max(4, Math.ceil(offload / 2))) : 0;
-      if (swap > 0) notes.push(`Suggest swap ≈ ${swap} GiB`);
+      if (offload > 0) notes.push(`Suggest CPU offload ≈ ${offload} GiB`);
     }
     setChoices(c);
     setWork(w);
     setCpuOffloadGb(offload);
-    setSwapSpaceGb(swap);
     setAdjustments(notes);
   };
 
@@ -233,17 +214,13 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
                 <FormField label="Hugging Face ID">
                   <Input placeholder="owner/repo" value={repoId} onChange={(e)=>setRepoId(e.target.value)} />
                 </FormField>
-                <div className="grid grid-cols-2 gap-2">
-                  <FormField label="Base Dir">
-                    <Input value={baseDir} onChange={(e)=>setBaseDir(e.target.value)} placeholder="/var/cortex/models" />
-                  </FormField>
-                  <FormField label="Folder">
-                    <Input value={folder} onChange={(e)=>setFolder(e.target.value)} placeholder="model-name" />
-                  </FormField>
-                </div>
+                <FormField label="Local folder" description={baseDir ? `under ${baseDir}` : undefined}>
+                  <Input value={folder} onChange={(e)=>setFolder(e.target.value)} placeholder="model-name" />
+                </FormField>
               </div>
-              <div className="mt-3 pt-3 border-t border-white/5 flex justify-end">
-                <Button variant="cyan" size="sm" onClick={onFetchMeta} disabled={fetchingMeta}>
+              <div className="mt-3 pt-3 border-t border-white/5 flex justify-between items-center gap-3">
+                <span className="text-[11px] text-red-300" role={metaError ? 'alert' : undefined}>{metaError}</span>
+                <Button variant="cyan" size="sm" onClick={onFetchMeta} disabled={fetchingMeta || (!repoId && !folder)}>
                   {fetchingMeta ? 'Fetching...' : '🔍 Fetch Metadata'}
                 </Button>
               </div>
@@ -253,31 +230,33 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
           <section>
             <SectionTitle variant="cyan">📐 Specification</SectionTitle>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2">
-              <FormField label="Params (B)"><Input type="number" min={1} value={meta.paramsB} onChange={(e)=>setMeta({ ...meta, paramsB: Number(e.target.value)||meta.paramsB })} /></FormField>
-              <FormField label="Hidden Size"><Input type="number" min={512} step={64} value={meta.hiddenSize} onChange={(e)=>setMeta({ ...meta, hiddenSize: Number(e.target.value)||meta.hiddenSize })} /></FormField>
-              <FormField label="Layers"><Input type="number" min={1} value={meta.numLayers} onChange={(e)=>setMeta({ ...meta, numLayers: Number(e.target.value)||meta.numLayers })} /></FormField>
-              <FormField label="Context"><Input type="number" min={2048} step={1024} value={work.seqLen} onChange={(e)=>setWork({ ...work, seqLen: Number(e.target.value)||work.seqLen })} /></FormField>
-              <FormField label="Avg Active"><Input type="number" min={128} step={128} value={work.avgActiveTokens ?? 2048} onChange={(e)=>setWork({ ...work, avgActiveTokens: Number(e.target.value)|| (work.avgActiveTokens ?? 2048) })} /></FormField>
-              <FormField label="Max Seqs"><Input type="number" min={1} value={work.maxNumSeqs} onChange={(e)=>setWork({ ...work, maxNumSeqs: Number(e.target.value)||work.maxNumSeqs })} /></FormField>
-              <FormField label="TP Size"><Input type="number" min={1} value={choices.tpSize} onChange={(e)=>setChoices({ ...choices, tpSize: Math.max(1, Number(e.target.value)||choices.tpSize) })} /></FormField>
+              <FormField label="Params (B)"><NumberField min={0.01} allowEmpty={false} value={meta.paramsB} onChange={(v)=>setMeta({ ...meta, paramsB: v ?? meta.paramsB })} /></FormField>
+              <FormField label="Hidden Size"><NumberField min={1} step={64} integer allowEmpty={false} value={meta.hiddenSize} onChange={(v)=>setMeta({ ...meta, hiddenSize: v ?? meta.hiddenSize })} /></FormField>
+              <FormField label="Layers"><NumberField min={1} integer allowEmpty={false} value={meta.numLayers} onChange={(v)=>setMeta({ ...meta, numLayers: v ?? meta.numLayers })} /></FormField>
+              <FormField label="Context"><NumberField min={1} step={1024} integer allowEmpty={false} value={work.seqLen} onChange={(v)=>setWork({ ...work, seqLen: v ?? work.seqLen })} /></FormField>
+              <FormField label="Avg Active"><NumberField min={1} step={128} integer placeholder="2048" value={work.avgActiveTokens} onChange={(v)=>setWork({ ...work, avgActiveTokens: v })} /></FormField>
+              <FormField label="Max Seqs"><NumberField min={1} integer allowEmpty={false} value={work.maxNumSeqs} onChange={(v)=>setWork({ ...work, maxNumSeqs: v ?? work.maxNumSeqs })} /></FormField>
+              <FormField label="TP Size"><NumberField min={1} integer allowEmpty={false} value={choices.tpSize} onChange={(v)=>setChoices({ ...choices, tpSize: Math.max(1, v ?? choices.tpSize) })} /></FormField>
               <FormField label="DType">
-                <Select value={choices.dtype} onChange={(e)=>setChoices({ ...choices, dtype: e.target.value as any })}>
+                <Select value={choices.dtype} onChange={(e)=>setChoices({ ...choices, dtype: e.target.value as Precision })}>
                   <option value="auto">auto</option>
                   <option value="bfloat16">bfloat16</option>
                   <option value="float16">float16</option>
                 </Select>
               </FormField>
               <FormField label="Quant">
-                <Select value={choices.quantization} onChange={(e)=>setChoices({ ...choices, quantization: e.target.value as any })}>
+                <Select value={choices.quantization} onChange={(e)=>setChoices({ ...choices, quantization: e.target.value as Quantization })}>
                   <option value="">None</option>
                   <option value="awq">AWQ (4-bit)</option>
                   <option value="gptq">GPTQ (4-bit)</option>
                   <option value="fp8">FP8</option>
-                  <option value="int8">INT8</option>
+                  <option value="compressed-tensors">compressed-tensors (W8A8)</option>
+                  <option value="bitsandbytes">bitsandbytes (4-bit)</option>
+                  <option value="experts_int8">experts_int8 (MoE)</option>
                 </Select>
               </FormField>
               <FormField label="KV Cache">
-                <Select value={choices.kvCacheDtype} onChange={(e)=>setChoices({ ...choices, kvCacheDtype: e.target.value as any })}>
+                <Select value={choices.kvCacheDtype} onChange={(e)=>setChoices({ ...choices, kvCacheDtype: e.target.value as KvDtype })}>
                   <option value="">Auto</option>
                   <option value="fp8">FP8</option>
                 </Select>
@@ -314,7 +293,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
                     <div key={p.index} className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-[9px] uppercase font-black text-white/40">GPU {p.index}</span>
-                        <Badge size="sm" className={p.fits ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}>
+                        <Badge className={p.fits ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}>
                           {p.fits ? 'FITS' : 'OVERFLOW'}
                         </Badge>
                       </div>
@@ -333,7 +312,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
             </section>
           </div>
 
-          {(cpuOffloadGb > 0 || swapSpaceGb > 0 || adjustments.length > 0) && (
+          {(cpuOffloadGb > 0 || adjustments.length > 0) && (
             <Card className="p-3 bg-cyan-500/5 border-cyan-500/20 grid grid-cols-2 gap-4">
               {adjustments.length > 0 && (
                 <div className="space-y-1.5">
@@ -345,7 +324,6 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
                 <div className="text-[9px] font-black text-purple-400 uppercase tracking-widest">Offload</div>
                 <div className="flex gap-2 font-mono text-xs">
                   {cpuOffloadGb > 0 && <div className="p-1 bg-black/20 rounded border border-white/5 text-purple-300">CPU: {Math.round(cpuOffloadGb)}G</div>}
-                  {swapSpaceGb > 0 && <div className="p-1 bg-black/20 rounded border border-white/5 text-indigo-300">Disk: {Math.round(swapSpaceGb)}G</div>}
                 </div>
               </div>
             </Card>
@@ -355,7 +333,6 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
         <footer className="mt-auto pt-3 border-t border-white/10 flex items-center justify-between -mx-4 -mb-4 px-4 pb-4 bg-black/20">
           <div className="flex gap-2">
             <Button variant="default" size="sm" onClick={autoFit}>✨ Auto-Fit</Button>
-            <Button variant="default" size="sm" onClick={() => {}}>📥 Report</Button>
           </div>
           <div className="flex gap-2">
             <Button variant="default" size="sm" onClick={onClose}>Cancel</Button>

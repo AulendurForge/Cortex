@@ -52,7 +52,7 @@ python3 scripts/test_offline_models.py 1 2 3
 python3 scripts/test_offline_models.py
 
 # Set custom gateway URL
-CORTEX_GATEWAY_URL=http://192.168.1.181:8084 python3 scripts/test_offline_models.py 1
+CORTEX_GATEWAY_URL=http://192.168.1.50:8084 python3 scripts/test_offline_models.py 1
 ```
 
 ### Using Bash Test Script
@@ -187,12 +187,16 @@ The test script returns exit codes:
 
 This allows integration with CI/CD pipelines:
 
+The repository CI (`.github/workflows/ci.yml`) runs only unit tests (`pytest -m "not live and not
+integration"`); these model tests need a GPU host with model files and are run manually, e.g.
+from a self-hosted runner:
+
 ```yaml
-# Example GitHub Actions
-- name: Test offline models
-  run: |
-    python3 scripts/test_offline_models.py 1 2 3
+- name: Test offline models (self-hosted GPU runner)
+  run: python3 scripts/test_offline_models.py 1 2 3
 ```
+
+`make test-live GGUF=<file>` runs the equivalent llama.cpp end-to-end test inside the gateway container.
 
 ## Next Steps
 

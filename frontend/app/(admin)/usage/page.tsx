@@ -153,10 +153,10 @@ export default function UsagePage() {
               onChange={(v) => setFilters({ ...filters, hours: v })}
             />
           </div>
-          <FormField label="Model"><Select size="sm" value={filters.model ?? ''} onChange={(e) => setFilters({ ...filters, model: e.target.value })}><option value="">Any</option>{(topModels.data || []).map(m => <option key={m.model_name} value={m.model_name}>{m.model_name}</option>)}</Select></FormField>
-          <FormField label="Task"><Select size="sm" value={filters.task ?? ''} onChange={(e) => setFilters({ ...filters, task: e.target.value })}><option value="">Any</option><option value="chat">Chat</option><option value="completions">Completions</option><option value="embeddings">Embeddings</option></Select></FormField>
-          <FormField label="Status"><Select size="sm" value={filters.status ?? ''} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">Any</option><option value="2xx">Success</option><option value="4xx">Client Err</option><option value="5xx">Server Err</option></Select></FormField>
-          <FormField label="Rows"><Select size="sm" value={String(limit)} onChange={(e) => { setPage(0); setLimit(Number(e.target.value)); }}><option value="25">25</option><option value="50">50</option><option value="100">100</option></Select></FormField>
+          <FormField label="Model"><Select selectSize="sm" value={filters.model ?? ''} onChange={(e) => setFilters({ ...filters, model: e.target.value })}><option value="">Any</option>{(topModels.data || []).map(m => <option key={m.model_name} value={m.model_name}>{m.model_name}</option>)}</Select></FormField>
+          <FormField label="Task"><Select selectSize="sm" value={filters.task ?? ''} onChange={(e) => setFilters({ ...filters, task: e.target.value })}><option value="">Any</option><option value="chat">Chat</option><option value="completions">Completions</option><option value="embeddings">Embeddings</option></Select></FormField>
+          <FormField label="Status"><Select selectSize="sm" value={filters.status ?? ''} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">Any</option><option value="2xx">Success</option><option value="4xx">Client Err</option><option value="5xx">Server Err</option></Select></FormField>
+          <FormField label="Rows"><Select selectSize="sm" value={String(limit)} onChange={(e) => { setPage(0); setLimit(Number(e.target.value)); }}><option value="25">25</option><option value="50">50</option><option value="100">100</option></Select></FormField>
         </div>
       </Card>
 
@@ -178,7 +178,7 @@ export default function UsagePage() {
         <Card className="p-4">
           <SectionTitle variant="purple" className="text-[10px]">Model Demand</SectionTitle>
           <div className="bg-black/20 p-2 rounded-xl border border-white/5">
-            <BarChart data={(topModels.data || []).map(m => ({ label: m.model_name, value: m.requests }))} height={180} color="#a855f7" />
+            <BarChart data={(topModels.data || []).map(m => ({ label: m.model_name, value: m.requests }))} barColor="#a855f7" />
           </div>
         </Card>
       </div>

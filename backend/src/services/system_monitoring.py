@@ -416,3 +416,9 @@ async def get_system_capabilities(settings) -> Capabilities:
     )
     _caps_cache = (now, out)
     return out
+
+
+async def get_gpu_metrics(settings=None):
+    """Per-GPU metrics (Prometheus/DCGM, NVML fallback). Thin wrapper for services."""
+    from ..routes.admin import collect_gpu_metrics  # lazy import: routes import this module
+    return await collect_gpu_metrics()

@@ -76,7 +76,7 @@ if [ -z "$USB" ]; then
   lsblk -e7 -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | sed 's/^/  /'
   echo ""
   echo "A drive with no MOUNTPOINT still needs mounting - see section 15"
-  echo "of NEMOTRON_3_SUPER_DEPLOYMENT.md."
+  echo "of docs/models/nemotron-3-super.md."
   exit 1
 fi
 
@@ -232,7 +232,7 @@ for IMG in "$DERIVED_IMAGE" "$BASE_IMAGE"; do
   else
     if [ "$IMG" = "$DERIVED_IMAGE" ]; then
       die "Derived image '$IMG' not found. Build it first (see section 4b of
-     NEMOTRON_3_SUPER_DEPLOYMENT.md), or set DERIVED_IMAGE=..."
+     docs/models/nemotron-3-super.md), or set DERIVED_IMAGE=..."
     fi
     warn "Base image '$IMG' not found - it will be omitted. 'make
        verify-offline' on the far side may report it missing."
@@ -400,7 +400,7 @@ copy_in() {
 }
 copy_in "$SCRIPT_DIR/nemotron-import-from-usb.sh" "$DEST/scripts/"
 copy_in "$SCRIPT_DIR/nemotron-configure-cortex.py" "$DEST/scripts/"
-copy_in "$REPO_DIR/NEMOTRON_3_SUPER_DEPLOYMENT.md" "$DEST/"
+copy_in "$REPO_DIR/docs/models/nemotron-3-super.md" "$DEST/"
 chmod +x "$DEST/scripts/"*.sh 2>/dev/null
 
 # Dockerfile so the derived image can be rebuilt from scratch if needed

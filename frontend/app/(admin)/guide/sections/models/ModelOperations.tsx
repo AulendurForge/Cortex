@@ -86,7 +86,7 @@ export default function ModelOperations() {
             title="Config"
             description="Edit model configuration settings"
             when="Any state"
-            effect="Opens configuration wizard; requires restart to apply changes"
+            effect="Opens the configuration wizard. Save & Apply stores the settings and restarts a running model; a stopped model keeps them for its next start. Request defaults never need a restart."
             color="purple"
           />
           <ActionCard 
@@ -125,9 +125,10 @@ export default function ModelOperations() {
           </p>
 
           <ol className="space-y-3 text-[11px] text-white/70">
-            <ProcessStep num={1} title="Dry Run Validation">
-              Cortex estimates VRAM requirements and checks your configuration. You'll see a toast 
-              with the estimated VRAM usage, or a warning if there may be issues.
+            <ProcessStep num={1} title="Pre-flight (Dry Run)">
+              Cortex builds the exact engine command, checks the image cache and estimates VRAM. If the check
+              passes you see a toast with the estimate; if it reports errors a dialog lists them and you choose
+              <strong> Start anyway</strong> or cancel.
             </ProcessStep>
             <ProcessStep num={2} title="Container Creation">
               A Docker container is created with the appropriate inference engine (vLLM or llama.cpp), 
@@ -142,8 +143,9 @@ export default function ModelOperations() {
               several minutes. State shows as "Loading" with a pulsing indicator.
             </ProcessStep>
             <ProcessStep num={5} title="Health Check">
-              Cortex polls the model's readiness endpoint. When the model responds healthy, 
-              state transitions to "Running" and you see a success toast.
+              Cortex polls the model's readiness endpoint. When the model responds healthy,
+              state transitions to "Running" and you see a success toast. If it fails, the state badge shows
+              <strong> FAILED</strong> with the reason (hover or open Logs to see it), and the Logs modal runs a diagnosis.
             </ProcessStep>
           </ol>
 
@@ -374,10 +376,12 @@ export default function ModelOperations() {
           </div>
 
           <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-            <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider mb-1">Apply & Restart</div>
+            <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider mb-1">Save & Apply</div>
             <p className="text-[10px] text-white/60 leading-relaxed">
-              After saving changes, click <strong>Apply & Restart</strong> to stop the current container 
-              and start a new one with the updated configuration. This causes brief downtime.
+              Click <strong>Save & Apply</strong> to persist your changes. If the model is running, the current
+              container is stopped and a new one starts with the updated configuration (brief downtime).
+              If the model is stopped, the settings are saved and used the next time you start it.
+              Leaving a numeric field empty means &quot;use the engine default&quot;.
             </p>
           </div>
         </Card>

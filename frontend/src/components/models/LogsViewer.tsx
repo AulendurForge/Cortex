@@ -1,80 +1,90 @@
 'use client';
 
 import React from 'react';
+import apiFetch from '../../lib/api-clients';
 import { useToast } from '../../providers/ToastProvider';
 import { safeCopyToClipboard } from '../../lib/clipboard';
 
+export const LOG_TAIL_OPTIONS = [200, 1000, 5000, 20000] as const;
+
 type Props = {
-  fetcher: () => Promise<string>;
+  /** Model whose container logs are shown (uses the shared API client with ?tail=). */
+  modelId?: number;
+  /** Optional override of the log source (tests, non-model logs). */
+  fetcher?: (tail: number) => Promise<string>;
   onClose?: () => void;
   pollMs?: number;
   modelName?: string;
+  modelState?: string;
+  stateReason?: string | null;
+  initialTail?: number;
 };
 
-export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props) {
+/**
+ * Live container log viewer.  The fetcher is kept in a ref so re-renders of
+ * the parent never restart the polling interval; "Retry" refetches; the tail
+ * size is requested from the backend (10..20000 lines) instead of trimming
+ * a full dump client-side.
+ */
+export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName, modelState, stateReason, initialTail = 1000 }: Props) {
   const { addToast } = useToast();
   const [text, setText] = React.useState<string>('');
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string | null>(null);
   const [live, setLive] = React.useState<boolean>(true);
+  const [tail, setTail] = React.useState<number>(initialTail);
+  const [reloadTick, setReloadTick] = React.useState<number>(0);
   const [lastUpdated, setLastUpdated] = React.useState<number>(0);
   const [atBottom, setAtBottom] = React.useState<boolean>(true);
-  const [truncated, setTruncated] = React.useState<boolean>(false);
   const preRef = React.useRef<HTMLPreElement | null>(null);
+  const atBottomRef = React.useRef(true);
 
   // Search state
   const [query, setQuery] = React.useState<string>('');
   const [caseSensitive, setCaseSensitive] = React.useState<boolean>(false);
   const [useRegex, setUseRegex] = React.useState<boolean>(false);
   const [activeMatch, setActiveMatch] = React.useState<number>(0);
-
-  // Presentation toggles
   const [wrap, setWrap] = React.useState<boolean>(true);
-
-  // Severity filter (best-effort client side)
   const severities = ['ERROR', 'WARN', 'INFO', 'DEBUG'] as const;
   const [activeSev, setActiveSev] = React.useState<Set<string>>(new Set());
 
-  const MAX_BYTES = 2 * 1024 * 1024; // ~2MB cap
+  // Keep the fetcher in a ref: parent re-renders must not restart polling.
+  const fetcherRef = React.useRef<(tail: number) => Promise<string>>(async () => '');
+  fetcherRef.current = fetcher ?? (async (n: number) => {
+    if (modelId === undefined) return '';
+    const r: unknown = await apiFetch(`/admin/models/${modelId}/logs?tail=${n}`);
+    if (typeof r === 'string') return r;
+    if (r && typeof r === 'object' && typeof (r as { logs?: unknown }).logs === 'string') return (r as { logs: string }).logs;
+    return '';
+  });
+
+  React.useEffect(() => { atBottomRef.current = atBottom; }, [atBottom]);
 
   // Polling
   React.useEffect(() => {
     let stop = false;
-    let timer: any = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
     const loadOnce = async () => {
       try {
-        const t = (await fetcher()) || '';
+        const t = (await fetcherRef.current(tail)) || '';
         if (stop) return;
-        // Truncation guard: keep last ~2MB
-        let next = t;
-        let didTruncate = false;
-        if (new Blob([t]).size > MAX_BYTES) {
-          // heuristic cut to last 2MB at a newline boundary
-          const cut = Math.max(0, t.length - MAX_BYTES);
-          const idx = t.indexOf('\n', cut);
-          next = idx > 0 ? t.slice(idx + 1) : t.slice(-MAX_BYTES);
-          didTruncate = true;
-        }
-        setTruncated(didTruncate);
-        setText(next);
+        setText(t);
         setError(null);
         setLastUpdated(Date.now());
-        if (atBottom) {
-          requestAnimationFrame(() => {
-            try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight }); } catch {}
-          });
+        if (atBottomRef.current) {
+          requestAnimationFrame(() => { try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight }); } catch {} });
         }
-      } catch (e: any) {
-        if (!stop) setError(e?.message || 'Failed to load logs');
+      } catch (e) {
+        if (!stop) setError((e as { message?: string })?.message || 'Failed to load logs');
       } finally {
         if (!stop) setLoading(false);
       }
     };
     setLoading(true);
-    loadOnce();
-    if (live) timer = setInterval(loadOnce, Math.max(750, pollMs));
+    void loadOnce();
+    if (live) timer = setInterval(() => { void loadOnce(); }, Math.max(750, pollMs));
     return () => { stop = true; if (timer) clearInterval(timer); };
-  }, [fetcher, live, pollMs, atBottom]);
+  }, [modelId, live, pollMs, tail, reloadTick]);
 
   // Track scroll position for follow behavior
   React.useEffect(() => {
@@ -124,7 +134,7 @@ export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props
       const re = /\b(ERROR|WARN|INFO|DEBUG)\b/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(filteredText))) {
-        const sev = (m[1] as any) as 'ERROR'|'WARN'|'INFO'|'DEBUG';
+        const sev = m[1] as 'ERROR'|'WARN'|'INFO'|'DEBUG';
         out.push({ start: m.index, end: m.index + m[0].length, sev });
         if (m.index === re.lastIndex) re.lastIndex++;
       }
@@ -232,6 +242,12 @@ export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props
 
   return (
     <div className="space-y-2">
+      {(modelState || stateReason) && (
+        <div className={`text-xs rounded px-3 py-2 border ${modelState === 'failed' ? 'bg-red-500/10 border-red-500/30 text-red-200' : 'bg-white/5 border-white/10 text-white/70'}`} data-testid="logs-state-header">
+          <span className="font-semibold uppercase tracking-wider">{modelState || 'unknown'}</span>
+          {stateReason && <span className="ml-2">— {stateReason}</span>}
+        </div>
+      )}
       {/* Controls */}
       <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 md:gap-3">
         {/* Search group */}
@@ -246,8 +262,8 @@ export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props
           <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={caseSensitive} onChange={e=>setCaseSensitive(e.target.checked)} />Case</label>
           <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={useRegex} onChange={e=>setUseRegex(e.target.checked)} />Regex</label>
           <div className="flex items-center gap-1 text-xs">
-            <button className="btn" onClick={()=> setActiveMatch(m => matches.length ? (m - 1 + matches.length) % matches.length : 0)} disabled={!matches.length}>Prev</button>
-            <button className="btn" onClick={()=> setActiveMatch(m => matches.length ? (m + 1) % matches.length : 0)} disabled={!matches.length}>Next</button>
+            <button type="button" className="btn" onClick={()=> setActiveMatch(m => matches.length ? (m - 1 + matches.length) % matches.length : 0)} disabled={!matches.length}>Prev</button>
+            <button type="button" className="btn" onClick={()=> setActiveMatch(m => matches.length ? (m + 1) % matches.length : 0)} disabled={!matches.length}>Next</button>
             <span className="text-white/70">{matches.length ? `${activeMatch+1}/${matches.length}` : '0/0'}</span>
           </div>
         </div>
@@ -256,19 +272,24 @@ export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props
           <span className="text-xs text-white/60 hidden md:inline">Filter</span>
           <div className="hidden md:flex items-center gap-1 text-xs">
             {severities.map(s => (
-              <button key={s} className={`btn ${activeSev.has(s) ? 'bg-white/10' : ''}`} onClick={() => {
+              <button type="button" key={s} className={`btn ${activeSev.has(s) ? 'bg-white/10' : ''}`} aria-pressed={activeSev.has(s)} onClick={() => {
                 const next = new Set(activeSev); next.has(s) ? next.delete(s) : next.add(s); setActiveSev(next);
               }}>{s}</button>
             ))}
           </div>
+          <label className="text-xs flex items-center gap-1 whitespace-nowrap">Tail
+            <select className="input py-0.5 px-2 text-xs w-24" value={tail} onChange={(e) => setTail(Number(e.target.value))} aria-label="Lines to fetch">
+              {LOG_TAIL_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
           <span className="text-xs text-white/60 hidden md:inline">View</span>
           <label className="text-xs flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={wrap} onChange={e=>setWrap(e.target.checked)} />Wrap</label>
-          <button className="btn whitespace-nowrap" onClick={()=>setLive(v=>!v)} aria-pressed={live} title={live ? 'Pause live updates' : 'Resume live updates'}>
+          <button type="button" className="btn whitespace-nowrap" onClick={()=>setLive(v=>!v)} aria-pressed={live} title={live ? 'Pause live updates' : 'Resume live updates'}>
             {live ? 'Pause stream' : 'Resume stream'}
           </button>
-          <button className="btn whitespace-nowrap" onClick={copyLogs}>Copy</button>
-          <button className="btn whitespace-nowrap" onClick={downloadLogs}>Download</button>
-          {onClose && (<button className="btn whitespace-nowrap" onClick={onClose}>Close</button>)}
+          <button type="button" className="btn whitespace-nowrap" onClick={copyLogs}>Copy</button>
+          <button type="button" className="btn whitespace-nowrap" onClick={downloadLogs}>Download</button>
+          {onClose && (<button type="button" className="btn whitespace-nowrap" onClick={onClose}>Close</button>)}
         </div>
       </div>
 
@@ -279,13 +300,12 @@ export function LogsViewer({ fetcher, onClose, pollMs = 2000, modelName }: Props
           {!loading && (
             <span className="text-white/60">{live ? 'Live updating' : 'Paused'} · Updated {fmtAgo(lastUpdated)}</span>
           )}
-          {truncated && <span className="text-amber-200">Older lines truncated</span>}
           {error && (
-            <span className="text-red-300">{error} <button className="btn ml-2" onClick={()=>setLastUpdated(0)}>Retry</button></span>
+            <span className="text-red-300" role="alert">{error} <button type="button" className="btn ml-2" onClick={() => setReloadTick((n) => n + 1)}>Retry</button></span>
           )}
         </div>
         {!atBottom && (
-          <button className="btn" onClick={()=>{ try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight, behavior: 'smooth' }); } catch{} }}>Jump to latest</button>
+          <button type="button" className="btn" onClick={()=>{ try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight, behavior: 'smooth' }); } catch{} }}>Jump to latest</button>
         )}
       </div>
 

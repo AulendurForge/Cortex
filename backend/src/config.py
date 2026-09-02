@@ -6,7 +6,13 @@ class Settings(BaseSettings):
     VLLM_GEN_URLS: str = "http://localhost:8001"
     VLLM_EMB_URLS: str = "http://localhost:8002"
     INTERNAL_VLLM_API_KEY: str = ""
-    GATEWAY_DEV_ALLOW_ALL_KEYS: bool = True
+    # Accept /v1 requests without an API key. NEVER enable outside a trusted dev box.
+    GATEWAY_DEV_ALLOW_ALL_KEYS: bool = False
+    # Secret used to sign admin session cookies. Auto-generated and persisted in ConfigKV when empty.
+    SESSION_SECRET: str = ""
+    SESSION_TTL_HOURS: int = 8
+    # Set True behind TLS so the session cookie is only sent over https.
+    SESSION_COOKIE_SECURE: bool = False
     REQUEST_MAX_BODY_BYTES: int = 1_048_576
     # Rate limiting / Redis
     RATE_LIMIT_ENABLED: bool = False
@@ -43,7 +49,7 @@ class Settings(BaseSettings):
     CORS_ENABLED: bool = True
     # For cookie auth to work across origins, this must NOT be "*"; set your frontend origin.
     # Docker Compose automatically sets this to detected host IP + localhost fallbacks.
-    # Format: comma-separated origins, e.g., "http://192.168.1.181:3001,http://localhost:3001"
+    # Format: comma-separated origins, e.g., "http://192.168.1.50:3001,http://localhost:3001"
     CORS_ALLOW_ORIGINS: str = "http://localhost:3001,http://127.0.0.1:3001"  # Override via env
     SECURITY_HEADERS_ENABLED: bool = True
     # Database
@@ -58,6 +64,12 @@ class Settings(BaseSettings):
     HF_CACHE_DIR: str = "/var/cortex/hf-cache"
     # Export directory for Deployment page (should be host-mounted for persistence)
     CORTEX_EXPORT_DIR: str = "/var/cortex/exports"
+    CORTEX_EXPORT_DIR_HOST: str | None = None
+    # Comma-separated container paths where transfer drives are mounted (bundles are read/written under these)
+    CORTEX_TRANSFER_DIRS: str = "/var/cortex/exports,/host/media,/host/mnt,/host/run/media"
+    # Infra images (postgres, redis, prometheus, ...) as pinned in versions.env; passed by compose for bundle exports
+    CORTEX_INFRA_IMAGES: str = ""
+    CORTEX_VERSION: str = "dev"
     # Host paths (used when creating vLLM containers via Docker SDK)
     CORTEX_MODELS_DIR_HOST: str | None = None
     HF_CACHE_DIR_HOST: str | None = None
@@ -67,11 +79,14 @@ class Settings(BaseSettings):
     # - Qwen3 models require newer Transformers (the Qwen3 config.json requires >= 4.51)
     # - Keep this pinned to the same version used by scripts/prepare-offline-deployment.sh
     # For Qwen3 offline deployments, update the offline package to a compatible vLLM tag, then set VLLM_IMAGE accordingly.
-    VLLM_IMAGE: str = "vllm/vllm-openai:latest"
+    # Pinned engine images (keep in sync with versions.env and the offline package).
+    # vLLM v0.28.0: CUDA 13 base image, requires NVIDIA driver >= 580. Use the -cu129 tag for older drivers.
+    VLLM_IMAGE: str = "vllm/vllm-openai:v0.28.0"
     # llama.cpp settings
     # Use official llama.cpp server with CUDA support
     # The 'server-cuda' tag includes CUDA-compiled llama-server binary
-    LLAMACPP_IMAGE: str = "ghcr.io/ggml-org/llama.cpp:server-cuda"  # Keep aligned with offline package tag
+    # llama.cpp build b10731 (server-cuda, CUDA 12.8). `server-cuda` without a build number floats daily.
+    LLAMACPP_IMAGE: str = "ghcr.io/ggml-org/llama.cpp:server-cuda-b10731"
     
     # Offline/Air-gapped deployment settings
     OFFLINE_MODE: bool = False  # Set True to prevent internet access for image pulls
@@ -79,35 +94,18 @@ class Settings(BaseSettings):
     REQUIRE_IMAGE_PRECACHE: bool = False  # Strict mode: fail if image not locally cached
     IMAGE_PULL_TIMEOUT: int = 600  # Seconds to wait for image pull (10 minutes)
     LLAMACPP_GEN_URLS: str = ""
-    LLAMACPP_DEFAULT_NGL: int = 999
-    LLAMACPP_DEFAULT_BATCH_SIZE: int = 2048  # Increased from 512 for better throughput
-    LLAMACPP_DEFAULT_UBATCH_SIZE: int = 2048  # Physical batch size for prompt processing
-    LLAMACPP_DEFAULT_THREADS: int = 32
-    LLAMACPP_DEFAULT_CONTEXT: int = 16384  # Increased from 8192 for longer prompts
     # Server-side timeout controls for multi-user stability
     LLAMACPP_SERVER_TIMEOUT: int = 300  # 5 minutes max per request
-    LLAMACPP_MAX_PARALLEL: int = 16  # Increased from 4 for better concurrency (16 slots)
-    LLAMACPP_CONT_BATCHING: bool = True  # Enable continuous batching
-    # KV cache optimization (50% memory reduction with q8_0)
-    LLAMACPP_CACHE_TYPE_K: str = "q8_0"  # KV cache quantization for K (keys)
-    LLAMACPP_CACHE_TYPE_V: str = "q8_0"  # KV cache quantization for V (values)
     # Monitoring and observability (Gap #1)
     LLAMACPP_METRICS_ENABLED: bool = True  # Enable Prometheus /metrics endpoint
     LLAMACPP_SLOTS_ENABLED: bool = True    # Enable /slots endpoint for slot status
     # Startup timeout configuration (Gap #2)
     LLAMACPP_STARTUP_TIMEOUT: int = 300    # Default 5 minutes for model loading
     VLLM_STARTUP_TIMEOUT: int = 600        # Default 10 minutes for vLLM model loading
-    # Logging configuration (Gap #3)
-    LLAMACPP_LOG_VERBOSE: bool = False     # Enable verbose logging (performance impact)
     LLAMACPP_LOG_TIMESTAMPS: bool = True   # Enable timestamps in log messages
-    LLAMACPP_LOG_COLORS: str = "auto"      # Log colors: on, off, or auto
-    # Startup options (Gap #6)
-    LLAMACPP_CHECK_TENSORS: bool = True    # Check tensor integrity on load (catches corrupted GGUFs)
-    LLAMACPP_SKIP_WARMUP: bool = False     # Skip warmup run for faster startup
-    # Chat template options (Gap #7)
-    LLAMACPP_JINJA_ENABLED: bool = True    # Enable Jinja template engine for chat
-    # Memory management (Gap #8)
-    LLAMACPP_DEFRAG_THOLD: float = -1.0    # KV cache defrag threshold (-1 = disabled, 0.1 = 10%)
+    # Lifecycle
+    STOP_MODELS_ON_SHUTDOWN: bool = False  # Stop managed model containers when the gateway shuts down
+    MODEL_RECONCILE_SEC: int = 15          # How often the supervisor reconciles DB state with containers
 
     def gen_urls(self) -> List[str]:
         return [u.strip() for u in self.VLLM_GEN_URLS.split(",") if u.strip()]

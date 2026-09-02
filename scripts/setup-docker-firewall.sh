@@ -27,6 +27,29 @@
 
 set -e
 
+# ---------------------------------------------------------------------------
+# container_curl URL  - curl from inside a container WITHOUT pulling anything.
+# Uses a locally present image (the built Cortex gateway image has curl); on an
+# air-gapped host with none of them it falls back to curl on the host and says so.
+# ---------------------------------------------------------------------------
+CURL_IMAGE=""
+_pick_curl_image() {
+    local root; root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local ver=""; [ -f "$root/versions.env" ] && ver=$(grep -E '^CORTEX_VERSION=' "$root/versions.env" | cut -d= -f2)
+    for img in "cortex-gateway:${ver:-none}" cortex-gateway:dev curlimages/curl:8.10.1 curlimages/curl:latest alpine/curl:latest; do
+        if docker image inspect "$img" >/dev/null 2>&1; then CURL_IMAGE="$img"; return 0; fi
+    done
+    return 1
+}
+container_curl() {
+    local url="$1"; shift
+    if [ -z "$CURL_IMAGE" ] && ! _pick_curl_image; then
+        echo "  (no local image with curl; testing from the host instead - run 'make build' to enable in-container tests)" >&2
+        curl -s -m 5 "$@" "$url"; return $?
+    fi
+    docker run --rm --entrypoint curl --add-host=host.docker.internal:host-gateway "$CURL_IMAGE" -s -m 5 "$@" "$url"
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -108,7 +131,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-8084}"
 
 # Quick test from a container
 echo -e "Testing from Docker container to host port $GATEWAY_PORT..."
-TEST_RESULT=$(docker run --rm curlimages/curl:latest curl -s -m 3 "http://172.17.0.1:${GATEWAY_PORT}/health" 2>&1 || echo "FAILED")
+TEST_RESULT=$(container_curl "http://172.17.0.1:${GATEWAY_PORT}/health" 2>&1 || echo "FAILED")
 
 if [[ "$TEST_RESULT" == *"status"* ]]; then
     echo -e "${GREEN}✓ Container-to-host connectivity working!${NC}"

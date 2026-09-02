@@ -1,167 +1,77 @@
-# How to Set Custom Environment Variables in Cortex GUI
+# Setting Custom Environment Variables and Arguments
 
-## Quick Answer
+Each model has two escape hatches for options the form does not cover: **custom startup
+arguments** (`engine_startup_args_json`) and **custom environment variables**
+(`engine_startup_env_json`). Both are applied to the model's container on the next start
+(Apply restarts a running model).
 
-**Location:** In the **Custom Startup Configuration** section, switch to the **"Environment Variables"** tab.
+## In the UI
 
-## Step-by-Step Instructions
+**Models → Add / Configure model → Custom args & environment** (the last group of the
+advanced section; the group names follow `backend/src/engines/spec.py`).
 
-### Option 1: Standard Model Form
+- **Arguments** tab: one row per flag - `--flag` plus an optional value. Rows keep their order
+  and are appended after Cortex's own flags, so a custom flag overrides the form field that
+  emits the same flag. The dry-run shows the final command.
+- **Environment variables** tab: `NAME` = `value` rows, added to the container environment.
 
-1. Navigate to **Models** → **Add Model** (or edit an existing model)
-2. Scroll down past all the standard configuration sections
-3. Find the section titled **"⚙️ Custom Startup Configuration (Advanced)"**
-4. You'll see two tabs at the top:
-   - **Arguments** (for CLI flags like `--async-scheduling`)
-   - **Environment Variables** (for env vars like `VLLM_USE_FLASHINFER_MOE_FP8=1`)
-5. Click on the **"Environment Variables"** tab
-6. Click the **"+ Add Environment Variable"** button
-7. Fill in:
-   - **Name**: `VLLM_USE_FLASHINFER_MOE_FP8`
-   - **Value**: `1`
-8. Click **"Add Variable"**
-9. Repeat for the second variable:
-   - **Name**: `VLLM_FLASHINFER_MOE_BACKEND`
-   - **Value**: `throughput`
-10. Click **"Add Variable"**
+Example (vLLM, FlashInfer MoE kernels):
 
-### Option 2: Workflow Form (Multi-Step Wizard)
+| Name | Value |
+|---|---|
+| `VLLM_USE_FLASHINFER_MOE_FP8` | `1` |
+| `VLLM_FLASHINFER_MOE_BACKEND` | `throughput` |
 
-1. Navigate to **Models** → **Add Model** (if using workflow form)
-2. Progress through the steps:
-   - Step 1: Engine Selection
-   - Step 2: Model Information
-   - Step 3: Core Settings
-   - **Step 4: Startup** ← This is where you add custom env vars
-3. In the **Startup** step, you'll see the Custom Startup Configuration
-4. Click the **"Environment Variables"** tab
-5. Follow steps 6-10 from Option 1 above
+Example (llama.cpp): argument `--override-tensor` = `exps=CPU`; environment
+`GGML_CUDA_ENABLE_UNIFIED_MEMORY` = `1`.
 
-## Visual Guide
+## Through the API
 
-### Finding the Section
+Both fields are JSON strings:
 
-The **Custom Startup Configuration** section appears:
-- **In Standard Form**: At the bottom, after "Request Defaults"
-- **In Workflow Form**: In the "Startup" step (Step 4)
-
-### The Interface
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ ⚙️ Custom Startup Configuration (Advanced)              │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  [Arguments (0)]  [Environment Variables (0)]  ← Tabs │
-│                                                         │
-│  💡 Common Use Cases:                                   │
-│  • Nemotron FP8 MoE: VLLM_USE_FLASHINFER_MOE_FP8=1    │
-│  • HuggingFace offline: HF_HUB_OFFLINE=1               │
-│  • Logging level: VLLM_LOGGING_LEVEL=DEBUG             │
-│                                                         │
-│  [+ Add Environment Variable]  ← Click this button     │
-└─────────────────────────────────────────────────────────┘
+```json
+{
+  "engine_startup_args_json": "[{\"flag\": \"--reasoning-parser\", \"value\": \"nemotron_v3\"}, {\"flag\": \"--async-scheduling\"}]",
+  "engine_startup_env_json": "[{\"key\": \"VLLM_LOGGING_LEVEL\", \"value\": \"DEBUG\"}]"
+}
 ```
 
-### Adding a Variable
+`POST /admin/models/dry-run` (body) validates them without saving; `PATCH /admin/models/{id}`
+saves; `POST /admin/models/{id}/apply` restarts a running model with the new values.
 
-When you click **"+ Add Environment Variable"**, you'll see:
+## What is rejected
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Add Environment Variable                                 │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Name *                                                 │
-│  [VLLM_USE_FLASHINFER_MOE_FP8________________]        │
-│  Environment variable name (uppercase recommended)     │
-│                                                         │
-│  Value                                                  │
-│  [1________________________________________________]    │
-│  Value (empty string allowed)                          │
-│                                                         │
-│  [Cancel]  [Add Variable]  ← Click "Add Variable"     │
-└─────────────────────────────────────────────────────────┘
-```
+Validation runs at save time (not only in dry-run) and returns HTTP 400.
 
-## For Nemotron FP8 Model
+**Forbidden flags** (`custom_arg_forbidden`) - Cortex owns these:
 
-Add these two environment variables:
+`--host`, `--port`, `-p`, `--api-key`, `--api-key-file`, `--ssl-keyfile`, `--ssl-certfile`,
+`--ssl-ca-certs`, `--root-path`, `--model`, `-m`, `--served-model-name`, `--alias`, `-a`,
+`--uvicorn-log-level`
 
-### Variable 1:
-- **Name**: `VLLM_USE_FLASHINFER_MOE_FP8`
-- **Value**: `1`
+**Protected environment variables** (`env_var_protected`) - set by Cortex from the model's
+placement and mode:
 
-### Variable 2:
-- **Name**: `VLLM_FLASHINFER_MOE_BACKEND`
-- **Value**: `throughput`
+`NVIDIA_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `HF_HUB_OFFLINE`, `VLLM_API_KEY`,
+`LLAMA_API_KEY`, `LLAMA_ARG_HOST`, `LLAMA_ARG_PORT`, `LLAMA_ARG_MODEL`, `LLAMA_ARG_API_KEY`
 
-## After Adding Variables
+Everything else - including `NCCL_*`, `PYTORCH_CUDA_ALLOC_CONF`, `OMP_NUM_THREADS`,
+`HF_TOKEN` - is allowed. (Earlier documentation claimed `NCCL_*` was protected; it is not, and
+Cortex does not set NCCL variables itself.)
 
-You'll see them listed like this:
+Custom args are checked for shape only (a flag must start with `-`, short llama.cpp aliases
+are normalised). Whether the engine accepts the flag is only known at start: an unknown flag
+makes the container exit and the model shows `failed` with the engine's
+`unrecognized arguments` message in its logs.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ Environment Variables (2)                               │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  VLLM_USE_FLASHINFER_MOE_FP8=1  [Edit] [Delete]       │
-│  VLLM_FLASHINFER_MOE_BACKEND=throughput [Edit] [Delete]│
-│                                                         │
-│  [+ Add Environment Variable]                          │
-└─────────────────────────────────────────────────────────┘
-```
+## Notes
 
-## Important Notes
+- Values are passed as an argument list to Docker (no shell): JSON values such as
+  `{"method":"mtp","num_speculative_tokens":2}` need no extra quoting.
+- Env names are case-sensitive; empty values are allowed.
+- Recipes store custom args/env as part of the configuration snapshot (`config_json`).
+- Verify what a container got: `docker inspect <container> --format '{{json .Config.Env}}'`
+  and `docker inspect <container> --format '{{json .Args}}'` (the API key is present there -
+  treat the output as sensitive).
 
-1. **Case Sensitivity**: Environment variable names are case-sensitive. Use uppercase as shown.
-
-2. **Order Doesn't Matter**: You can add them in any order.
-
-3. **Editing**: Click **"Edit"** next to any variable to modify it.
-
-4. **Deleting**: Click **"Delete"** to remove a variable.
-
-5. **Protected Variables**: Some variables are protected and cannot be overridden:
-   - `CUDA_VISIBLE_DEVICES` (managed by Cortex)
-   - `NCCL_*` (managed by Cortex)
-   - `HF_HUB_OFFLINE` (managed by Cortex for offline mode)
-
-6. **Container Restart Required**: Changes to environment variables require restarting the model container to take effect.
-
-## Verification
-
-After saving the model and starting it, you can verify the environment variables are set:
-
-1. Check the model logs - they should show the custom env vars
-2. Or inspect the container:
-   ```bash
-   docker inspect <container-name> | grep -A 50 "Env"
-   ```
-
-You should see:
-```
-"Env": [
-  ...
-  "VLLM_USE_FLASHINFER_MOE_FP8=1",
-  "VLLM_FLASHINFER_MOE_BACKEND=throughput",
-  ...
-]
-```
-
-## Troubleshooting
-
-**Can't find the section?**
-- Make sure you've selected an **Engine Type** (vllm or llamacpp)
-- Scroll down past all the standard configuration sections
-- Look for the cyan-colored section header "⚙️ Custom Startup Configuration"
-
-**Variables not appearing?**
-- Make sure you clicked "Add Variable" (not just filled in the form)
-- Check that you're on the "Environment Variables" tab, not "Arguments"
-- Refresh the page if needed
-
-**Variables not taking effect?**
-- Restart the model container after adding/changing env vars
-- Check the container logs for any errors
-- Verify the variable names are spelled correctly (case-sensitive)
+Worked example: [Nemotron 3 Super](nemotron-3-super.md).

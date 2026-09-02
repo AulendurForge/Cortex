@@ -152,85 +152,251 @@ export const ModelMetricsSchema = z.object({
 export const ModelMetricsListSchema = z.array(ModelMetricsSchema);
 
 
-// Models (planned backend endpoints)
+// Models. NOTE: zod strips undeclared keys, so every field the backend
+// returns must be listed here or the Configure modal silently falls back to
+// defaults. backend/src/tests/test_model_schema_parity.py parses this block and
+// compares it with the pydantic ModelItem (generated from engines/spec.py).
+const nStr = () => z.string().nullable().optional();
+const nNum = () => z.number().nullable().optional();
+const nBool = () => z.boolean().nullable().optional();
+
+export const MODEL_STATES = ['stopped', 'starting', 'loading', 'running', 'stopping', 'failed'] as const;
+export const ModelStateSchema = z.enum(MODEL_STATES);
+export type ModelState = z.infer<typeof ModelStateSchema>;
+
 export const ModelItemSchema = z.object({
+  // --- identity ---
   id: z.number(),
   name: z.string(),
   served_model_name: z.string(),
-  task: z.enum(['generate', 'embed']).or(z.string()),
-  repo_id: z.string().nullable().optional(),
-  local_path: z.string().nullable().optional(),
-  dtype: z.string().nullable().optional(),
-  tp_size: z.number().nullable().optional(),
-  gpu_memory_utilization: z.number().nullable().optional(),
-  max_model_len: z.number().nullable().optional(),
-  // Engine type and llamacpp-specific fields
-  engine_type: z.enum(['vllm', 'llamacpp']).or(z.string()).optional().default('vllm'),
-  ngl: z.number().nullable().optional(),
-  tensor_split: z.string().nullable().optional(),
-  batch_size: z.number().nullable().optional(),
-  ubatch_size: z.number().nullable().optional(),
-  threads: z.number().nullable().optional(),
-  context_size: z.number().nullable().optional(),
-  parallel_slots: z.number().nullable().optional(),
-  rope_freq_base: z.number().nullable().optional(),
-  rope_freq_scale: z.number().nullable().optional(),
-  flash_attention: z.boolean().nullable().optional(),
-  mlock: z.boolean().nullable().optional(),
-  no_mmap: z.boolean().nullable().optional(),
-  numa_policy: z.string().nullable().optional(),
-  split_mode: z.string().nullable().optional(),
-  cache_type_k: z.string().nullable().optional(),
-  cache_type_v: z.string().nullable().optional(),
-  // vLLM advanced engine args (Gap #4)
-  attention_backend: z.string().nullable().optional(),
-  disable_log_requests: z.boolean().nullable().optional(),
-  disable_log_stats: z.boolean().nullable().optional(),
-  vllm_v1_enabled: z.boolean().nullable().optional(),
-  // vLLM GGUF weight format (Gap #7)
-  gguf_weight_format: z.string().nullable().optional(),
-  // Version-aware entrypoint (Gap #5)
-  entrypoint_override: z.string().nullable().optional(),
-  // Debug logging configuration (Gap #11)
-  debug_logging: z.boolean().nullable().optional(),
-  trace_mode: z.boolean().nullable().optional(),
-  // Request timeout configuration (Gap #13)
-  engine_request_timeout: z.number().nullable().optional(),
-  max_log_len: z.number().nullable().optional(),
-  state: z.enum(['stopped', 'starting', 'loading', 'running', 'failed']).or(z.string()),
-  port: z.number().nullable().optional(),
-  container_name: z.string().nullable().optional(),
+  task: z.string(),
+  repo_id: nStr(),
+  local_path: nStr(),
+  engine_type: z.enum(['vllm', 'llamacpp']).catch('vllm'),
+  // --- common (both engines) ---
+  engine_image: nStr(),
+  engine_version: nStr(),
+  engine_digest: nStr(),
+  selected_gpus: z.array(z.number()).nullable().optional(),
+  startup_timeout_sec: nNum(),
+  engine_startup_args_json: nStr(),
+  engine_startup_env_json: nStr(),
+  request_defaults_json: nStr(),
+  request_timeout_sec: nNum(),
+  stream_timeout_sec: nNum(),
+  seed: nNum(),
+  // --- vLLM: source / tokenizer ---
+  tokenizer: nStr(),
+  hf_config_path: nStr(),
+  tokenizer_mode: nStr(),
+  load_format: nStr(),
+  hf_overrides_json: nStr(),
+  trust_remote_code: nBool(),
+  // --- vLLM: placement / parallelism ---
+  device: nStr(),
+  tp_size: nNum(),
+  pipeline_parallel_size: nNum(),
+  data_parallel_size: nNum(),
+  enable_expert_parallel: nBool(),
+  distributed_executor_backend: nStr(),
+  // --- vLLM: memory ---
+  dtype: nStr(),
+  gpu_memory_utilization: nNum(),
+  kv_cache_memory_bytes: nNum(),
+  max_model_len: nNum(),
+  kv_cache_dtype: nStr(),
+  quantization: nStr(),
+  block_size: nNum(),
+  cpu_offload_gb: nNum(),
+  enable_prefix_caching: nBool(),
+  prefix_caching_hash_algo: nStr(),
+  // --- vLLM: throughput ---
+  max_num_seqs: nNum(),
+  max_num_batched_tokens: nNum(),
+  enable_chunked_prefill: nBool(),
+  enforce_eager: nBool(),
+  cuda_graph_sizes: nStr(),
+  compilation_config_json: nStr(),
+  async_scheduling: nBool(),
+  attention_backend: nStr(),
+  enable_sleep_mode: nBool(),
+  // --- behaviour (chat_template is shared by both engines) ---
+  chat_template: nStr(),
+  generation_config: nStr(),
+  override_generation_config_json: nStr(),
+  reasoning_parser: nStr(),
+  enable_auto_tool_choice: nBool(),
+  tool_call_parser: nStr(),
+  structured_outputs_config_json: nStr(),
+  limit_mm_per_prompt_json: nStr(),
+  // --- vLLM: adapters / speculative ---
+  enable_lora: nBool(),
+  lora_modules_json: nStr(),
+  max_loras: nNum(),
+  max_lora_rank: nNum(),
+  max_cpu_loras: nNum(),
+  speculative_config_json: nStr(),
+  // --- vLLM: logging ---
+  enable_log_requests: nBool(),
+  disable_log_stats: nBool(),
+  max_log_len: nNum(),
+  debug_logging: nBool(),
+  trace_mode: nBool(),
+  engine_request_timeout: nNum(),
+  entrypoint_override: nStr(),
+  // --- llama.cpp: placement / memory ---
+  ngl: nNum(),
+  main_gpu: nNum(),
+  split_mode: nStr(),
+  tensor_split: nStr(),
+  load_mode: nStr(),
+  context_size: nNum(),
+  parallel_slots: nNum(),
+  kv_unified: nBool(),
+  kv_unified_per_slot: nNum(),
+  fit_memory: nBool(),
+  cache_type_k: nStr(),
+  cache_type_v: nStr(),
+  flash_attn: nStr(),
+  batch_size: nNum(),
+  ubatch_size: nNum(),
+  threads: nNum(),
+  threads_http: nNum(),
+  cont_batching: nBool(),
+  cache_reuse: nNum(),
+  context_shift: nBool(),
+  n_cpu_moe: nNum(),
+  override_tensor: nStr(),
+  numa_policy: nStr(),
+  rope_freq_base: nNum(),
+  rope_freq_scale: nNum(),
+  // --- llama.cpp: behaviour ---
+  jinja_enabled: nBool(),
+  chat_template_file: nStr(),
+  chat_template_kwargs_json: nStr(),
+  reasoning_format: nStr(),
+  reasoning_budget: nNum(),
+  n_predict: nNum(),
+  grammar_file: nStr(),
+  enable_embeddings: nBool(),
+  pooling: nStr(),
+  rerank: nBool(),
+  // --- llama.cpp: adapters / speculative / multimodal ---
+  lora_adapters_json: nStr(),
+  lora_init_without_apply: nBool(),
+  draft_model_path: nStr(),
+  spec_type: nStr(),
+  draft_n: nNum(),
+  spec_draft_n_min: nNum(),
+  draft_p_min: nNum(),
+  spec_draft_ngl: nNum(),
+  mmproj: nStr(),
+  mmproj_offload: nBool(),
+  // --- llama.cpp: logging / startup ---
+  verbose_logging: nBool(),
+  check_tensors: nBool(),
+  skip_warmup: nBool(),
+  // --- request defaults (Plane C): sampling knobs + custom extras ---
+  temperature: nNum(),
+  top_p: nNum(),
+  top_k: nNum(),
+  repetition_penalty: nNum(),
+  frequency_penalty: nNum(),
+  presence_penalty: nNum(),
+  custom_request_json: nStr(),
+  // --- runtime ---
+  state: ModelStateSchema.catch('stopped'),
+  state_reason: nStr(),
   archived: z.boolean().optional().default(false),
-  // Optional tuning fields returned by backend; tolerate presence without requiring them
-  kv_cache_dtype: z.string().nullable().optional(),
-  max_num_batched_tokens: z.number().nullable().optional(),
-  quantization: z.string().nullable().optional(),
-  block_size: z.number().nullable().optional(),
-  swap_space_gb: z.number().nullable().optional(),
-  enforce_eager: z.boolean().nullable().optional(),
-  trust_remote_code: z.boolean().nullable().optional(),
-  cpu_offload_gb: z.number().nullable().optional(),
-  enable_prefix_caching: z.boolean().nullable().optional(),
-  prefix_caching_hash_algo: z.string().nullable().optional(),
-  enable_chunked_prefill: z.boolean().nullable().optional(),
-  max_num_seqs: z.number().nullable().optional(),
-  cuda_graph_sizes: z.string().nullable().optional(),
-  pipeline_parallel_size: z.number().nullable().optional(),
-  device: z.string().nullable().optional(),
-  tokenizer: z.string().nullable().optional(),
-  hf_config_path: z.string().nullable().optional(),
-  // Engine metadata (Plane D - Phase 0)
-  engine_image: z.string().nullable().optional(),
-  engine_version: z.string().nullable().optional(),
-  engine_digest: z.string().nullable().optional(),
-  // Request defaults (Plane C - Phase 1)
-  request_defaults_json: z.string().nullable().optional(),
-  request_timeout_sec: z.number().nullable().optional(),
-  stream_timeout_sec: z.number().nullable().optional(),
-  // Custom startup configuration (Plane B - Phase 2)
-  engine_startup_args_json: z.string().nullable().optional(),
-  engine_startup_env_json: z.string().nullable().optional(),
+  port: nNum(),
+  container_name: nStr(),
+  created_at: nStr(),
+  updated_at: nStr(),
 });
+export type ModelItem = z.infer<typeof ModelItemSchema>;
 export const ModelListSchema = z.array(ModelItemSchema);
 
+// Engine spec (GET /admin/engines/spec)
+export const FieldSpecSchema = z.object({
+  name: z.string(),
+  engine: z.enum(['vllm', 'llamacpp', 'both']),
+  kind: z.enum(['int', 'float', 'str', 'bool', 'json']),
+  form: z.string().optional(),
+  flag: z.union([z.string(), z.record(z.string())]).nullable().optional(),
+  env: z.string().nullable().optional(),
+  label: z.string().optional(),
+  help: z.string().optional(),
+  group: z.string().optional(),
+  default: z.unknown().optional(),
+  choices: z.array(z.string()).nullable().optional(),
+  min: z.number().nullable().optional(),
+  max: z.number().nullable().optional(),
+  path: z.boolean().optional(),
+  emit_if: z.string().nullable().optional(),
+  requires: z.record(z.unknown()).optional(),
+  order: z.number().optional(),
+});
+export const EngineSpecSchema = z.object({
+  groups: z.array(z.object({ key: z.string(), label: z.string() })),
+  fields: z.array(FieldSpecSchema),
+  images: z.record(z.string()).optional().default({}),
+  policies: z.record(z.unknown()).optional().default({}),
+});
 
+// Dry run (POST /admin/models/dry-run and /admin/models/{id}/dry-run)
+export const DryRunWarningSchema = z.object({
+  severity: z.string(),
+  category: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  message: z.string(),
+  fix: z.string().nullable().optional(),
+});
+export const DryRunResultSchema = z.object({
+  command: z.array(z.string()).optional().default([]),
+  command_str: z.string().optional().default(''),
+  env: z.record(z.string()).optional().default({}),
+  image: z.string().nullable().optional(),
+  image_cached: z.boolean().nullable().optional(),
+  valid: z.boolean().optional().default(true),
+  warnings: z.array(DryRunWarningSchema).optional().default([]),
+  vram_estimate: z.record(z.unknown()).nullable().optional(),
+});
+export type DryRunResult = z.infer<typeof DryRunResultSchema>;
+export type DryRunWarning = z.infer<typeof DryRunWarningSchema>;
+
+// Recipes
+export const RecipeItemSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  description: nStr(),
+  model_id: nNum(),
+  model_name: z.string(),
+  served_model_name: z.string(),
+  task: z.string(),
+  engine_type: z.string(),
+  mode: z.string(),
+  created_at: nStr(),
+  updated_at: nStr(),
+});
+export const RecipeListSchema = z.array(RecipeItemSchema);
+export const RecipeDetailSchema = RecipeItemSchema.extend({
+  repo_id: nStr(),
+  local_path: nStr(),
+  config: z.record(z.unknown()),
+});
+export type RecipeItem = z.infer<typeof RecipeItemSchema>;
+export type RecipeDetail = z.infer<typeof RecipeDetailSchema>;
+
+// Readiness / lifecycle responses
+export const ReadinessSchema = z.object({ status: z.string(), detail: z.string().nullable().optional() });
+export const GpuInfoSchema = z.object({
+  index: z.number(),
+  name: z.string().nullable().optional(),
+  mem_total_mb: z.number().nullable().optional(),
+  mem_used_mb: z.number().nullable().optional(),
+  compute_capability: z.union([z.string(), z.number()]).nullable().optional(),
+  architecture: z.string().nullable().optional(),
+  flash_attention_supported: z.boolean().nullable().optional(),
+});
+export const GpuInfoListSchema = z.array(GpuInfoSchema);
+export type GpuInfo = z.infer<typeof GpuInfoSchema>;

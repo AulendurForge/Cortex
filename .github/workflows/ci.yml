@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-unit:
+    name: Backend unit tests
+    runs-on: ubuntu-latest
+    # Postgres is only needed by tests that open a session; unit tests use it when present.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cortex
+          POSTGRES_PASSWORD: cortex
+          POSTGRES_DB: cortex
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cortex"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Alembic migrations apply to an empty database
+        env:
+          DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:5432/cortex
+        run: python -c "from src.services.migrations import run_migrations; import os; run_migrations(os.environ['DATABASE_URL'])"
+      - name: Unit tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:5432/cortex
+          CORTEX_MODELS_DIR: /tmp/cortex-models
+        run: |
+          mkdir -p /tmp/cortex-models
+          python -m pytest -q -m "not live and not integration"
+
+  frontend:
+    name: Frontend typecheck, tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  docker-images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Load pinned versions
+        run: cat versions.env | grep -v '^#' | grep . >> "$GITHUB_ENV"
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          tags: cortex-gateway:${{ env.CORTEX_VERSION }}
+          build-args: PYTHON_IMAGE=${{ env.PYTHON_IMAGE }}
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,scope=gateway,mode=max
+      - name: Build frontend image (prod target)
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          target: prod
+          push: false
+          tags: cortex-frontend:${{ env.CORTEX_VERSION }}
+          build-args: NODE_IMAGE=${{ env.NODE_IMAGE }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+      - name: Dependency images and offline rebuild (docker build --network none)
+        run: |
+          make build-deps
+          make build-offline ENV=prod
+      - name: Compose files are valid
+        env:
+          INTERNAL_VLLM_API_KEY: ci-only
+          SESSION_SECRET: ci-only
+          ADMIN_BOOTSTRAP_PASSWORD: ci-only
+          CORS_ALLOW_ORIGINS: https://cortex.example.com
+        run: |
+          docker compose -f docker.compose.dev.yaml config -q
+          docker compose -f docker.compose.prod.yaml config -q
+      - name: Shell scripts parse
+        run: for f in scripts/*.sh backend/entrypoint.sh; do bash -n "$f"; done
+
+  docs:
+    name: Docs build (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install mkdocs mkdocs-material
+      - run: mkdocs build --strict

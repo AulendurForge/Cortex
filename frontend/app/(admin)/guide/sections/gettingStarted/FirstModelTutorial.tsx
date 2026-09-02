@@ -264,8 +264,8 @@ export default function FirstModelTutorial() {
                   In the Model Selection step:
                 </p>
                 <ol className="text-[11px] text-white/70 ml-4 space-y-1">
-                  <li>1. Set <strong>Base Directory</strong> to <code className="text-cyan-300 bg-black/30 px-1 rounded">/models</code></li>
-                  <li>2. Click <strong>Save & Scan</strong></li>
+                  <li>1. Check the read-only <strong>Models directory</strong> (set by <code className="text-cyan-300 bg-black/30 px-1 rounded">CORTEX_MODELS_DIR</code>)</li>
+                  <li>2. Click <strong>Refresh</strong> to list its folders</li>
                   <li>3. Select <code className="text-cyan-300 bg-black/30 px-1 rounded">{model.folderName}</code> from the dropdown</li>
                 </ol>
                 <InfoBox variant="blue" className="text-[10px] p-2 mt-2">

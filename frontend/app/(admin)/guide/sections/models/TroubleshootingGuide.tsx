@@ -101,13 +101,13 @@ export default function TroubleshootingGuide() {
               "Model stuck in 'starting' state then fails"
             ]}
             causes={[
-              "Incorrect base directory configuration",
+              "CORTEX_MODELS_DIR points at the wrong host directory",
               "Model folder not mounted into container",
               "Typo in folder/file name",
               "Volume mount permissions issue"
             ]}
             solutions={[
-              "Verify the base directory in Cortex matches your Docker volume mount",
+              "Verify CORTEX_MODELS_DIR (shown read-only in Model Selection) matches your Docker volume mount",
               "Check that /models in container maps to your model directory on host",
               "For Offline mode: Use 'Refresh' to rescan and verify folder appears",
               "Ensure model folder name matches exactly (case-sensitive)",
@@ -185,22 +185,22 @@ export default function TroubleshootingGuide() {
 
           {/* Tokenizer Issues */}
           <TroubleshootCard 
-            issue="Tokenizer not found (GGUF)"
+            issue="Tokenizer not found (vLLM SafeTensors folder)"
             symptoms={[
               "Error: 'Tokenizer not found' or 'tokenizer.json missing'",
-              "GGUF model fails to start",
+              "vLLM model fails to start",
               "Model loads but generates garbage"
             ]}
             causes={[
-              "GGUF files don't include tokenizer",
-              "Tokenizer HF repo not specified",
-              "No tokenizer.json in local folder"
+              "The folder holds weights but no tokenizer files",
+              "Custom tokenizer needs tokenizer_mode=slow/mistral",
+              "GGUF file added under vLLM (rejected: gguf_requires_llamacpp)"
             ]}
             solutions={[
-              "Provide HF repo ID for tokenizer (e.g., 'meta-llama/Llama-3.1-8B')",
-              "Download tokenizer files to the model folder",
-              "For local tokenizer: Ensure tokenizer.json and config.json exist",
-              "Match tokenizer to the model's architecture/family"
+              "Copy tokenizer.json / tokenizer_config.json into the model folder",
+              "Or set the optional Tokenizer (HF repo or path) under Model Selection > Tokenizer & config overrides",
+              "Set tokenizer_mode in the spec section for Mistral tokenizers",
+              "For GGUF files use llama.cpp: the tokenizer is inside the GGUF"
             ]}
             color="amber"
           />
@@ -220,8 +220,8 @@ export default function TroubleshootingGuide() {
             ]}
             solutions={[
               "Disable Flash Attention for older GPUs (RTX 20xx and earlier)",
-              "For vLLM: Set attention_backend to 'XFORMERS' or 'auto'",
-              "For llama.cpp: Uncheck 'Flash Attention' checkbox",
+              "For vLLM: Set Attention backend to auto, TRITON_ATTN or TORCH_SDPA",
+              "For llama.cpp: Set Flash attention to 'off' (and keep the V cache at f16)",
               "Check GPU compute capability: nvidia-smi --query-gpu=compute_cap"
             ]}
             color="blue"

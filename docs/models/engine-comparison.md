@@ -88,7 +88,7 @@
 
 | Aspect | vLLM | llama.cpp |
 |--------|------|-----------|
-| **Container image** | vllm/vllm-openai:latest | cortex/llamacpp-server:latest (custom) |
+| **Container image** | `vllm/vllm-openai:v0.28.0` (pinned in `versions.env`) | `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` (pinned) |
 | **Startup time** | Fast (10-30s for 7B) | Moderate (30-60s for 120B) |
 | **Model format** | HF Transformers, (GGUF exp) | GGUF only |
 | **Online download** | ✅ From HuggingFace | ❌ Local files only |

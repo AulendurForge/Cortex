@@ -168,7 +168,7 @@ echo ""
 echo "Testing bootstrap commands (dry-run)..."
 echo ""
 
-test_command "make bootstrap-default (dry-run)" "make -n bootstrap-default"
+test_command "make setup-admin (dry-run)" "make -n setup-admin"
 test_command "make login (dry-run)" "make -n login"
 test_command "make create-key (dry-run)" "make -n create-key"
 

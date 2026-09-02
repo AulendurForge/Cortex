@@ -1,5 +1,5 @@
 site_name: CORTEX
-site_description: OpenAI-compatible gateway and admin UI for operating vLLM engines. Built by Aulendur Labs.
+site_description: OpenAI-compatible gateway and admin UI for operating vLLM and llama.cpp engines. Built by Aulendur Labs.
 theme:
   name: material
   features:
@@ -23,13 +23,15 @@ markdown_extensions:
       custom_checkbox: true
 plugins:
   - search
+exclude_docs: |
+  REVITALIZATION_CHECKLIST.md
 nav:
   - Home: index.md
   - Getting Started:
-      - Quickstart (Docker): getting-started/quickstart-docker.md
+      - Quick Start: getting-started/quick-start.md
       - Quickstart (Local Dev): getting-started/quickstart-local.md
-      - Admin Setup Guide: getting-started/admin-setup.md
       - Configuration: getting-started/configuration.md
+      - Admin Setup Guide: getting-started/admin-setup.md
       - Configuration Checklist: getting-started/configuration-checklist.md
   - Features:
       - Chat Playground: features/chat-playground.md
@@ -46,31 +48,41 @@ nav:
   - Integration:
       - External Applications: integration/external-applications.md
   - Operations:
-      - Network Access: operations/network-access.md
-      - Deployments: operations/deployments.md
+      - Deployment Options: operations/deployments.md
+      - Production Deployment: operations/production-deployment.md
       - Offline Deployment: operations/offline-deployment.md
+      - Runbooks: operations/runbooks.md
+      - Backup & Restore: operations/backup-restore.md
+      - Network Access: operations/network-access.md
       - Makefile Guide: operations/makefile-guide.md
       - Model Container Lifecycle: operations/model-container-lifecycle.md
       - Scaling & Reliability: operations/scaling.md
-      - Backup & Restore: operations/backup-restore.md
       - NVIDIA Driver Updates: operations/UPDATE_NVIDIA_DRIVERS.md
       - Upgrade Notes: operations/upgrade-notes.md
+      - Testing Offline Models: TESTING_OFFLINE_MODELS.md
   - Models:
+      - Model Management: models/model-management.md
       - HuggingFace Model Download: models/huggingface-model-download.md
       - Engine Comparison: models/engine-comparison.md
       - vLLM Guide: models/vllm.md
       - llama.cpp Guide: models/llamaCPP.md
+      - Custom Args & Environment: models/setting-custom-env-vars.md
       - GGUF Format Guide: models/gguf-format.md
       - Multi-Part GGUF Files: models/gguf-multipart.md
+      - "Example: Nemotron 3 Super": models/nemotron-3-super.md
       - Engine Research: models/engine-research.md
-      - Model Management: models/model-management.md
   - Security:
-      - Security Posture: security/security.md
+      - Security: security/security.md
       - Threat Model: security/threat-model.md
+  - Analysis:
+      - GGUF Implementation Gaps: analysis/ggufImplementationGaps.md
+      - Bug Review Plan: bug/bug-review-execution-plan.md
+      - Model Config Persistence: bug/model-config-persistence-todo.md
+      - Full-Stack Review Prompt: bug/opus-full-stack-review-prompt.md
   - Contributing:
       - How to Contribute: contributing/how-to-contribute.md
       - Coding Standards: contributing/coding-standards.md
-      - ADRs: 
+      - ADRs:
           - Overview: contributing/adr/README.md
+          - Template: contributing/adr/template.md
           - "ADR 001: Never Delete Model Files": contributing/adr/001-never-delete-model-files.md
-

@@ -11,6 +11,29 @@
 
 set -e
 
+# ---------------------------------------------------------------------------
+# container_curl URL  - curl from inside a container WITHOUT pulling anything.
+# Uses a locally present image (the built Cortex gateway image has curl); on an
+# air-gapped host with none of them it falls back to curl on the host and says so.
+# ---------------------------------------------------------------------------
+CURL_IMAGE=""
+_pick_curl_image() {
+    local root; root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local ver=""; [ -f "$root/versions.env" ] && ver=$(grep -E '^CORTEX_VERSION=' "$root/versions.env" | cut -d= -f2)
+    for img in "cortex-gateway:${ver:-none}" cortex-gateway:dev curlimages/curl:8.10.1 curlimages/curl:latest alpine/curl:latest; do
+        if docker image inspect "$img" >/dev/null 2>&1; then CURL_IMAGE="$img"; return 0; fi
+    done
+    return 1
+}
+container_curl() {
+    local url="$1"; shift
+    if [ -z "$CURL_IMAGE" ] && ! _pick_curl_image; then
+        echo "  (no local image with curl; testing from the host instead - run 'make build' to enable in-container tests)" >&2
+        curl -s -m 5 "$@" "$url"; return $?
+    fi
+    docker run --rm --entrypoint curl --add-host=host.docker.internal:host-gateway "$CURL_IMAGE" -s -m 5 "$@" "$url"
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -139,12 +162,7 @@ echo ""
 echo -e "${BOLD}5. Testing from Docker Container (host.docker.internal)${NC}"
 echo ""
 
-DOCKER_HDI_RESULT=$(docker run --rm \
-    --add-host=host.docker.internal:host-gateway \
-    curlimages/curl:latest \
-    curl -s -o /dev/null -w "%{http_code}" \
-    "http://host.docker.internal:$CORTEX_PORT/health" \
-    --connect-timeout 10 2>/dev/null || echo "000")
+DOCKER_HDI_RESULT=$(container_curl "http://host.docker.internal:$CORTEX_PORT/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
 
 if [[ "$DOCKER_HDI_RESULT" == "200" ]]; then
     echo -e "${GREEN}✓${NC} Docker → host.docker.internal:$CORTEX_PORT → HTTP 200 OK"
@@ -161,11 +179,7 @@ echo ""
 echo -e "${BOLD}6. Testing from Docker Container (LAN IP)${NC}"
 echo ""
 
-DOCKER_LAN_RESULT=$(docker run --rm \
-    curlimages/curl:latest \
-    curl -s -o /dev/null -w "%{http_code}" \
-    "http://$HOST_IP:$CORTEX_PORT/health" \
-    --connect-timeout 10 2>/dev/null || echo "000")
+DOCKER_LAN_RESULT=$(container_curl "http://$HOST_IP:$CORTEX_PORT/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
 
 if [[ "$DOCKER_LAN_RESULT" == "200" ]]; then
     echo -e "${GREEN}✓${NC} Docker → $HOST_IP:$CORTEX_PORT → HTTP 200 OK"
@@ -186,11 +200,7 @@ echo ""
 DOCKER_GATEWAY=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || echo "172.17.0.1")
 echo -e "  ${BLUE}Docker bridge gateway:${NC} $DOCKER_GATEWAY"
 
-DOCKER_GW_RESULT=$(docker run --rm \
-    curlimages/curl:latest \
-    curl -s -o /dev/null -w "%{http_code}" \
-    "http://$DOCKER_GATEWAY:$CORTEX_PORT/health" \
-    --connect-timeout 10 2>/dev/null || echo "000")
+DOCKER_GW_RESULT=$(container_curl "http://$DOCKER_GATEWAY:$CORTEX_PORT/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
 
 if [[ "$DOCKER_GW_RESULT" == "200" ]]; then
     echo -e "${GREEN}✓${NC} Docker → $DOCKER_GATEWAY:$CORTEX_PORT → HTTP 200 OK"

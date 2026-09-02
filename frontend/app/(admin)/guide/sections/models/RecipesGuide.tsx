@@ -212,15 +212,15 @@ export default function RecipesGuide() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <RecipeAction 
-              icon="📤"
-              title="Export"
-              description="Download recipe as JSON for backup or sharing"
+              icon="📥"
+              title="Load"
+              description="Open the Add Model wizard prefilled with the recipe (mode is derived from the source)"
               color="cyan"
             />
             <RecipeAction 
-              icon="📥"
-              title="Import"
-              description="Upload a JSON recipe file from another source"
+              icon="🔌"
+              title="API"
+              description="GET/POST/PATCH /admin/recipes and POST /admin/recipes/from-model/{id} for automation"
               color="emerald"
             />
             <RecipeAction 
@@ -232,26 +232,33 @@ export default function RecipesGuide() {
           </div>
 
           <div className="p-4 bg-black/30 rounded-lg border border-white/10 space-y-3">
-            <div className="text-[11px] font-bold text-white">Recipe JSON Format</div>
+            <div className="text-[11px] font-bold text-white">Recipe JSON Format (GET /admin/recipes/&#123;id&#125;)</div>
             <p className="text-[10px] text-white/60 leading-relaxed mb-2">
-              Exported recipes are JSON files containing all configuration fields. You can edit these 
-              manually or use them for automation:
+              A recipe is identity plus a <code>config</code> object holding every engine field and the request defaults.
+              The same shape (plus <code>recipe_name</code>) is accepted by <code>POST /admin/recipes</code>:
             </p>
             <pre className="text-[9px] text-white/60 bg-black/50 p-3 rounded overflow-x-auto">
 {`{
+  "id": 3,
   "name": "Llama 3.1 8B Production",
+  "description": "2x A6000",
+  "model_name": "Llama 3.1 8B",
+  "served_model_name": "llama-3.1-8b",
+  "task": "generate",
   "engine_type": "vllm",
   "mode": "online",
   "repo_id": "meta-llama/Llama-3.1-8B-Instruct",
-  "served_model_name": "llama-3.1-8b",
-  "task": "generate",
-  "tp_size": 2,
-  "selected_gpus": [0, 1],
-  "max_model_len": 32768,
-  "gpu_memory_utilization": 0.9,
-  "dtype": "bfloat16",
-  "temperature": 0.7,
-  ...
+  "local_path": null,
+  "config": {
+    "tp_size": 2,
+    "selected_gpus": [0, 1],
+    "max_model_len": 32768,
+    "gpu_memory_utilization": 0.9,
+    "dtype": "bfloat16",
+    "temperature": 0.7,
+    "engine_startup_args_json": "[]",
+    ...
+  }
 }`}
             </pre>
           </div>
@@ -279,7 +286,7 @@ export default function RecipesGuide() {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-emerald-400">✓</span>
-                <span><strong>Export regularly</strong> — Keep backups of important recipes</span>
+                <span><strong>Back up via the API</strong> — <code>GET /admin/recipes/&#123;id&#125;</code> returns the full JSON</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-emerald-400">✓</span>

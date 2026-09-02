@@ -326,6 +326,6 @@ export OPENAI_API_KEY="your-cortex-api-key"
 
 ## Related Documentation
 
-- [Cortex Quickstart](../getting-started/quickstart-docker.md)
+- [Cortex Quick start](../getting-started/quick-start.md)
 - [API Reference](../api/openai-compatible.md)
 - [Admin Setup Guide](../getting-started/admin-setup.md)

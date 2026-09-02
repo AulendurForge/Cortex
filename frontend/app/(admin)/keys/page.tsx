@@ -121,10 +121,10 @@ export default function KeysPage() {
         actions={
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 bg-white/5 p-1.5 rounded-xl border border-white/10 glass">
-              <FormField label="Search"><Input size="sm" className="bg-black/20 h-8" placeholder="Prefix…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /></FormField>
-              <FormField label="User"><Select size="sm" className="bg-black/20 h-8" value={String(filters.user_id ?? '')} onChange={(e) => setFilters({ ...filters, user_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All Users</option>{userOptions.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}</Select></FormField>
-              <FormField label="Org"><Select size="sm" className="bg-black/20 h-8" value={String(filters.org_id ?? '')} onChange={(e) => setFilters({ ...filters, org_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All Orgs</option>{orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></FormField>
-              <FormField label="Sort"><Select size="sm" className="bg-black/20 h-8" value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}><option value="created_at:desc">Newest</option><option value="last_used_at:desc">Recent</option></Select></FormField>
+              <FormField label="Search"><Input className="bg-black/20 h-8" placeholder="Prefix…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /></FormField>
+              <FormField label="User"><Select selectSize="sm" className="bg-black/20 h-8" value={String(filters.user_id ?? '')} onChange={(e) => setFilters({ ...filters, user_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All Users</option>{userOptions.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}</Select></FormField>
+              <FormField label="Org"><Select selectSize="sm" className="bg-black/20 h-8" value={String(filters.org_id ?? '')} onChange={(e) => setFilters({ ...filters, org_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All Orgs</option>{orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></FormField>
+              <FormField label="Sort"><Select selectSize="sm" className="bg-black/20 h-8" value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}><option value="created_at:desc">Newest</option><option value="last_used_at:desc">Recent</option></Select></FormField>
             </div>
             <Button variant="cyan" size="sm" onClick={() => setOpen(true)} className="h-11 px-6 font-bold uppercase tracking-widest text-[10px]">
               <span className="mr-2 text-base">🔑</span> New Key

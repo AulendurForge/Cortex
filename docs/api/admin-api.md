@@ -27,7 +27,10 @@ curl -X POST "$GATEWAY/admin/keys" -H 'Content-Type: application/json' -d '{"sco
 - `POST /admin/models/{id}/start` — start model container
 - `POST /admin/models/{id}/stop` — stop model container
 - `POST /admin/models/{id}/apply` — apply configuration changes
-- `POST /admin/models/{id}/dry-run` — validate config + preview command (also returns VRAM estimation)
+- `POST /admin/models/dry-run` — validate a configuration body without saving; returns the redacted command and `issues[]`
+- `POST /admin/models/{id}/dry-run` — same for a stored model
+- `POST /admin/models/{id}/archive` — archive (hide) a model
+- `GET /admin/engines/spec` — the field/flag table the UI and validators are generated from
 - `POST /admin/models/{id}/test` — test model inference
 - `GET /admin/models/{id}/readiness` — check model readiness status
 - `GET /admin/models/{id}/logs` — recent container logs
@@ -35,22 +38,31 @@ curl -X POST "$GATEWAY/admin/keys" -H 'Content-Type: application/json' -d '{"sco
 - `DELETE /admin/models/{id}` — delete model (database entry only; files preserved)
 - Registry: `GET/POST/DELETE /admin/models/registry` — manage model routing registry
 
-### Model States
-Models transition through these states: `stopped` → `starting` → `loading` → `running`
-
-Error states: `failed` (check logs for diagnostics)
+### Model states
+`stopped` → `starting` (container being created) → `loading` (container up, engine not ready) →
+`running`; `stopping` while a stop is in progress; `failed` with `state_reason`
+(`startup_timeout_after_600s`, `container_exited: ...`, `engine_unhealthy: ...`, `start_failed: ...`,
+`container_not_found`). `start` returns `{"status": "loading"}` immediately and the supervisor tracks
+the startup; `apply` returns `{"status": "saved"}` for a stopped model and restarts a running one;
+`readiness` returns `status` = `stopped` / `loading` / `ready` / `error` (+ `detail`).
+All `/admin` routes require an admin session; the first admin is created with
+`POST /auth/bootstrap-owner` (only while no admin exists).
 
 ### Dry-Run Response
 The dry-run endpoint returns:
 ```json
 {
-  "command": ["vllm", "serve", "--model", "/models/..."],
-  "warnings": [
-    {"severity": "warning", "category": "vram", "title": "VRAM Warning", "message": "..."}
-  ],
-  "vram_estimate_gb": 4.5
+  "engine": "vllm",
+  "image": "vllm/vllm-openai:v0.28.0",
+  "container_name": "vllm-model-12",
+  "command": ["--model", "/models/...", "--served-model-name", "...", "--api-key", "***", "..."],
+  "env": {"NVIDIA_VISIBLE_DEVICES": "0,1", "HF_HUB_OFFLINE": "1"},
+  "issues": [
+    {"severity": "warning", "field": "gpu_memory_utilization", "message": "..."}
+  ]
 }
 ```
+`issues[].severity` is `error` (start would fail) or `warning`. Secrets are redacted.
 
 ## Usage
 - `GET /admin/usage` — recent requests (filters, pagination)
@@ -261,33 +273,31 @@ Models with `engine_type: llamacpp` support speculative decoding:
 | Field | Type | Description |
 |-------|------|-------------|
 | `draft_model_path` | string | Path to draft model GGUF inside container |
-| `draft_n` | integer | Number of tokens to draft (default: 16) |
-| `draft_p_min` | float | Minimum acceptance probability (default: 0.5) |
+| `draft_n` | integer | `--spec-draft-n-max` (engine default 3) |
+| `spec_draft_n_min` / `draft_p_min` / `spec_draft_ngl` / `spec_type` | see spec | `--spec-draft-n-min`, `--spec-draft-p-min`, `--spec-draft-ngl`, `--spec-type` |
 
-## Model Fields (vLLM GGUF)
+The complete field list with flags and defaults is generated from `backend/src/engines/spec.py`
+(`GET /admin/engines/spec`) and documented in [vLLM](../models/vllm.md) and
+[llama.cpp](../models/llamaCPP.md). GGUF files always run on llama.cpp; there are no vLLM GGUF fields.
 
-Models with `engine_type: vllm` using GGUF files:
+## Transfer bundles & database restore
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `gguf_weight_format` | string | GGUF format type: `auto`, `gguf`, `ggml` |
+Endpoints behind the **Transfer** page: export engine images, models (configuration + files) and
+the Cortex program to a mounted drive, and import them on an air-gapped host. Bundle format and
+workflow: [Offline deployment](../operations/offline-deployment.md).
 
-## Deployment & Migration
-
-Endpoints for exporting/importing Cortex configurations and database.
-
-### Export Operations
-- `POST /admin/deployment/export` — Start full deployment export
-- `POST /admin/deployment/export-model/{id}` — Export single model
-- `POST /admin/deployment/estimate-size` — Estimate export size and check disk space
-
-### Import Operations
-- `GET /admin/deployment/model-manifests?output_dir=...` — List available model manifests
-- `POST /admin/deployment/import-model` — Import model from manifest (supports `dry_run`)
+### Bundles
+- `GET /admin/bundles/locations` — Transfer locations (exports dir, `/media`, `/mnt`, `/run/media`) with free space and bundles found
+- `GET /admin/bundles/images` — Engine, infra and program images (pinned defaults, per-model overrides, local cache)
+- `POST /admin/bundles/plan` — Dry-run of an export (contents, size, free space, warnings); same body as export
+- `POST /admin/bundles/export` — Start an export job
+- `GET /admin/bundles/scan?path=...&verify=false` — Inspect a bundle: images (loaded?), models (files on host? registered?), checksums
+- `POST /admin/bundles/import` — Load images, copy model files into the models dir, register models (`conflict`: rename | skip | replace | error)
+- `GET /admin/bundles/status` — Current/latest job; `POST /admin/bundles/cancel` — cancel it
 
 ### Database Operations
-- `POST /admin/deployment/check-database-dump` — Check if dump file exists
-- `POST /admin/deployment/restore-database` — Restore database from dump
+- `GET /admin/deployment/database-dump?output_dir=...` — Check if `db/cortex.sql` exists in a bundle
+- `POST /admin/deployment/restore-database` — Restore database from that dump (`backup_first`, `drop_existing`)
 
 ### Job Management
 - `GET /admin/deployment/status` — Current job status
@@ -295,36 +305,46 @@ Endpoints for exporting/importing Cortex configurations and database.
 - `GET /admin/deployment/jobs/{id}` — Get specific job
 - `DELETE /admin/deployment/jobs/{id}` — Cancel running job
 
-### Export Request
+### Export / Plan Request
 
 ```json
 {
-  "output_dir": "/var/cortex/exports",
-  "include_images": true,
-  "include_db": true,
-  "include_configs": true,
-  "include_models_manifest": true,
-  "tar_models": false,
-  "tar_hf_cache": false,
-  "allow_pull_images": true
+  "destination": "/host/media/usb",
+  "name": "cortex-bundle-2026-09-02",
+  "image_refs": ["vllm/vllm-openai:v0.28.0"],
+  "include_infra_images": false,
+  "include_program_images": true,
+  "model_ids": [12, 15],
+  "include_model_files": true,
+  "include_db_dump": false,
+  "pull_missing": true
 }
 ```
 
-### Import Model Request
+`destination` is the container path reported by `/admin/bundles/locations` (`/host/media/...`
+is the host's `/media/...`). Every selected model adds the exact engine image it is configured
+with. `POST /admin/bundles/plan` returns the same structure without side effects.
+
+### Import Request
 
 ```json
 {
-  "output_dir": "/var/cortex/exports",
-  "manifest_file": "model-1.json",
-  "conflict_strategy": "rename",
-  "dry_run": true
+  "path": "/host/media/usb/cortex-bundle-2026-09-02",
+  "load_images": true,
+  "image_refs": null,
+  "import_models": true,
+  "served_model_names": null,
+  "copy_files": true,
+  "conflict": "rename",
+  "verify_checksums": true
 }
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `conflict_strategy` | string | `error` or `rename` (adds "-IMPORTED" suffix) |
-| `dry_run` | boolean | Preview import without making changes |
+| `image_refs` / `served_model_names` | array or null | subset to import; `null` = everything in the bundle |
+| `conflict` | string | `rename` (adds `-2`, `-3` …), `skip`, `replace` (configuration of a stopped model), `error` |
+| `verify_checksums` | boolean | read every file once and compare with `checksums.sha256` before importing |
 
 ### Database Restore Request
 
@@ -345,10 +365,10 @@ Endpoints for exporting/importing Cortex configurations and database.
 
 ```json
 {
-  "id": "deploy-1234567890",
+  "id": "bundle_export-1736483400",
   "status": "running",
-  "job_type": "export",
-  "step": "Exporting Docker images",
+  "job_type": "bundle_export",
+  "step": "images",
   "progress": 0.45,
   "started_at": 1736483400.0,
   "estimated_size_bytes": 6452936704,

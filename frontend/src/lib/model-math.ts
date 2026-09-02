@@ -1,5 +1,5 @@
 export type Precision = 'auto' | 'bfloat16' | 'float16';
-export type Quantization = '' | 'awq' | 'gptq' | 'fp8' | 'int8';
+export type Quantization = '' | 'awq' | 'gptq' | 'fp8' | 'compressed-tensors' | 'bitsandbytes' | 'experts_int8';
 export type KvDtype = '' | 'fp8' | 'fp8_e4m3' | 'fp8_e5m2';
 
 export type HardwareSnapshot = {
@@ -48,7 +48,9 @@ export function bytesPerWeight(dtype: Precision, quant: Quantization): number {
   if (quant === 'awq') return 0.5; // typical 4-bit effective
   if (quant === 'gptq') return 0.5;
   if (quant === 'fp8') return 1.0;
-  if (quant === 'int8') return 1.0;
+  if (quant === 'compressed-tensors') return 1.0; // W8A8 typical; W4A16 checkpoints are smaller
+  if (quant === 'experts_int8') return 1.0;
+  if (quant === 'bitsandbytes') return 0.5; // 4-bit NF4 typical
   // unquantized
   if (dtype === 'bfloat16' || dtype === 'float16') return 2.0;
   return 2.0; // auto → assume 2 bytes

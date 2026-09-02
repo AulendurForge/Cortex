@@ -11,10 +11,12 @@ echo ""
 
 # Find all model containers
 echo "Scanning for model containers..."
-VLLM_CONTAINERS=$(docker ps -a --filter "name=vllm-model-" --format "{{.Names}}" | sort)
-LLAMACPP_CONTAINERS=$(docker ps -a --filter "name=llamacpp-model-" --format "{{.Names}}" | sort)
+# Managed containers carry the label cortex.managed=1; name patterns catch pre-label leftovers
+LABELLED=$(docker ps -a --filter "label=cortex.managed=1" --format "{{.Names}}")
+VLLM_CONTAINERS=$(docker ps -a --filter "name=vllm-model-" --format "{{.Names}}")
+LLAMACPP_CONTAINERS=$(docker ps -a --filter "name=llamacpp-model-" --format "{{.Names}}")
 
-ALL_CONTAINERS=$(echo -e "$VLLM_CONTAINERS\n$LLAMACPP_CONTAINERS" | grep -v '^$')
+ALL_CONTAINERS=$(printf "%s\n%s\n%s\n" "$LABELLED" "$VLLM_CONTAINERS" "$LLAMACPP_CONTAINERS" | grep -v '^$' | sort -u)
 
 if [ -z "$ALL_CONTAINERS" ]; then
     echo "✓ No model containers found"

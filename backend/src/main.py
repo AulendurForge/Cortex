@@ -14,6 +14,7 @@ from .routes.users import router as users_router
 from .routes.models import router as models_router
 from .routes.recipes import router as recipes_router
 from .routes.deployment import router as deployment_router
+from .routes.bundles import router as bundles_router
 from .routes.chat import router as chat_router
 from .middleware.ratelimit import check_rate_limit
 import httpx
@@ -27,6 +28,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import uuid
 from .state import set_model_registry as _set_model_registry
+from .auth import require_admin, load_or_create_session_secret
+from .services.model_supervisor import supervisor
+from .services.migrations import run_migrations
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Cortex Gateway", version="0.1.0")
 
@@ -34,10 +42,19 @@ app = FastAPI(title="Cortex Gateway", version="0.1.0")
 try:
     _settings_for_cors = get_settings()
     if _settings_for_cors.CORS_ENABLED:
-        allow = [o.strip() for o in _settings_for_cors.CORS_ALLOW_ORIGINS.split(",")] if _settings_for_cors.CORS_ALLOW_ORIGINS != "*" else ["*"]
+        allow = [o.strip() for o in _settings_for_cors.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+        # The admin UI authenticates with a cookie (credentialed fetch).  Browsers refuse a
+        # credentialed response whose Access-Control-Allow-Origin is the literal "*", and
+        # Starlette only echoes the request origin for "*" when the request already carries a
+        # cookie.  Net effect of a bare "*": the very first login (no cookie yet) is rejected by
+        # the browser while the cookie is still stored, so the second attempt "works".
+        # Translate "*" into an allow-all regex so the origin is always echoed explicitly.
+        allow_any = "*" in allow
+        allow = [o for o in allow if o != "*"]
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allow,
+            allow_origin_regex=r".*" if allow_any else None,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -94,6 +111,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     rid = getattr(request.state, "req_id", request.headers.get("x-request-id", ""))
+    logger.exception("unhandled error on %s %s (request_id=%s)", request.method, request.url.path, rid)
     content = {"error": {"code": 500, "message": "internal_server_error"}, "request_id": rid}
     return JSONResponse(status_code=500, content=content)
 
@@ -118,19 +136,71 @@ async def metrics():
     data = generate_latest()
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
+
+@app.get("/prometheus/sd")
+async def prometheus_sd():
+    """Prometheus HTTP service discovery: one target per running model, scraped through
+    ``/engine-metrics/{model_id}`` (see infra/prometheus/prometheus.yml). Unauthenticated like
+    /metrics; it reveals only model ids, served names and engine types."""
+    from sqlalchemy import select as _select
+    from .models import Model as _Model
+    if SessionLocal is None:
+        return JSONResponse(status_code=503, content=[])
+    async with SessionLocal() as session:
+        rows = (await session.execute(_select(_Model).where(_Model.state == "running"))).scalars().all()
+    host = os.environ.get("PROMETHEUS_SCRAPE_HOST", "host.docker.internal:8084")
+    return [
+        {"targets": [host],
+         "labels": {"__metrics_path__": f"/engine-metrics/{m.id}", "model_id": str(m.id),
+                    "served_model_name": m.served_model_name or "", "engine": m.engine_type or "",
+                    "container": m.container_name or ""}}
+        for m in rows
+    ]
+
+
+@app.get("/engine-metrics/{model_id}")
+async def engine_metrics(model_id: int):
+    """Proxy a running model's Prometheus metrics.
+
+    Engine containers listen on the loopback interface and require the internal API key,
+    so Prometheus scrapes them through the gateway (see infra/prometheus/prometheus.yml).
+    Like /metrics this endpoint is unauthenticated; it exposes only engine counters.
+    """
+    from sqlalchemy import select as _select
+    from .models import Model as _Model
+    if SessionLocal is None or http_client is None:
+        raise HTTPException(status_code=503, detail="not_ready")
+    async with SessionLocal() as session:
+        m = (await session.execute(_select(_Model).where(_Model.id == model_id))).scalar_one_or_none()
+    if not m or m.state != "running":
+        raise HTTPException(status_code=404, detail="model_not_running")
+    url = await supervisor.model_url(m)
+    headers = {}
+    key = get_settings().INTERNAL_VLLM_API_KEY
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    try:
+        r = await http_client.get(f"{url}/metrics", headers=headers, timeout=httpx.Timeout(connect=2.0, read=5.0, write=3.0, pool=5.0))
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"engine_unreachable: {e.__class__.__name__}")
+    return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "text/plain"))
+
 # OpenAI-compatible endpoints under /v1/*
 app.include_router(openai_router, prefix="/v1")
 # Chat playground endpoints (accessible by any authenticated user)
 app.include_router(chat_router, prefix="/v1")
 # Admin endpoints
-app.include_router(keys_router, prefix="/admin")
-app.include_router(admin_router, prefix="/admin")
+# Every /admin route requires an admin session (individual routes may add more checks).
+_admin_only = [Depends(require_admin)]
+app.include_router(keys_router, prefix="/admin", dependencies=_admin_only)
+app.include_router(admin_router, prefix="/admin", dependencies=_admin_only)
 app.include_router(authn_router, prefix="/auth")
-app.include_router(orgs_router, prefix="/admin")
-app.include_router(users_router, prefix="/admin")
+app.include_router(orgs_router, prefix="/admin", dependencies=_admin_only)
+app.include_router(users_router, prefix="/admin", dependencies=_admin_only)
 app.include_router(models_router, prefix="/admin")
-app.include_router(recipes_router, prefix="/admin")
-app.include_router(deployment_router, prefix="/admin")
+app.include_router(recipes_router, prefix="/admin", dependencies=_admin_only)
+app.include_router(deployment_router, prefix="/admin", dependencies=_admin_only)
+app.include_router(bundles_router, prefix="/admin", dependencies=_admin_only)
 
 
 # Shared resources: httpx client, redis
@@ -162,13 +232,14 @@ async def on_startup():
     global engine, SessionLocal
     engine = create_async_engine(settings.DATABASE_URL, future=True, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-    # Ensure schema exists in dev: create tables if they are missing
+    # Schema: Alembic migrations (baseline is stamped automatically for pre-Alembic databases)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await asyncio.to_thread(run_migrations, settings.DATABASE_URL)
     except Exception:
-        # In production, prefer Alembic migrations; this is best-effort.
-        pass
+        logger.exception("database migration failed; the API will not work correctly")
+        raise
+    # Session signing secret (from SESSION_SECRET or persisted in config_kv)
+    await load_or_create_session_secret(SessionLocal)
     # Background health poller (optional)
     try:
         if settings.HEALTH_POLL_SEC > 0:
@@ -196,6 +267,9 @@ async def on_startup():
     except Exception:
         pass
 
+    # Model lifecycle supervisor: reconciles DB ↔ containers ↔ registry and tracks startups
+    supervisor.start_background()
+
     # Ensure host-mapped directories exist (best-effort): models base and HF cache
     try:
         s = get_settings()
@@ -206,85 +280,38 @@ async def on_startup():
     except Exception:
         pass
 
-    # Auto-bootstrap admin user if environment variables are set (best-effort)
+    # First admin: created from ADMIN_BOOTSTRAP_USERNAME / ADMIN_BOOTSTRAP_PASSWORD while no admin exists
+    # (`make up` fills these into .env; `make setup-admin` resets the account later).
     try:
-        if settings.ADMIN_BOOTSTRAP_USERNAME and settings.ADMIN_BOOTSTRAP_PASSWORD:
-            if SessionLocal is not None:
-                from sqlalchemy import select as _sel, func as _func
-                from .models import User, Organization
-                from .crypto import pwd_context
-                
-                async with SessionLocal() as session:
-                    # Check if any admin exists
-                    try:
-                        admin_count = (await session.execute(
-                            _sel(_func.count()).select_from(User).where(User.role == "Admin")
-                        )).scalar_one()
-                        
-                        if int(admin_count or 0) == 0:
-                            print("[startup] No admin found, bootstrapping from environment variables...", flush=True)
-                            
-                            # Create org if specified
-                            org_id = None
-                            if settings.ADMIN_BOOTSTRAP_ORG:
-                                org = Organization(name=settings.ADMIN_BOOTSTRAP_ORG)
-                                session.add(org)
-                                await session.flush()
-                                org_id = org.id
-                            
-                            # Create admin user
-                            hashed = pwd_context.hash(settings.ADMIN_BOOTSTRAP_PASSWORD)
-                            admin = User(
-                                username=settings.ADMIN_BOOTSTRAP_USERNAME,
-                                role="Admin",
-                                org_id=org_id,
-                                password_hash=hashed
-                            )
-                            session.add(admin)
-                            await session.commit()
-                            print(f"[startup] ✓ Admin user '{settings.ADMIN_BOOTSTRAP_USERNAME}' created successfully", flush=True)
-                        else:
-                            print(f"[startup] Admin user already exists (count: {admin_count}), skipping bootstrap", flush=True)
-                    except Exception as e:
-                        print(f"[startup] Bootstrap check/creation failed: {e}", flush=True)
+        if SessionLocal is not None:
+            from .tools.set_admin import ensure_admin
+            from sqlalchemy import select as _sel, func as _func
+            from .models import User
+            async with SessionLocal() as session:
+                if settings.ADMIN_BOOTSTRAP_USERNAME and settings.ADMIN_BOOTSTRAP_PASSWORD:
+                    out = await ensure_admin(session, settings.ADMIN_BOOTSTRAP_USERNAME, settings.ADMIN_BOOTSTRAP_PASSWORD,
+                                             settings.ADMIN_BOOTSTRAP_ORG or "Default", only_if_no_admin=True)
+                    if out["action"] == "created":
+                        logger.info("[startup] admin user '%s' created from ADMIN_BOOTSTRAP_* settings", out["username"])
+                else:
+                    admins = (await session.execute(_sel(_func.count()).select_from(User).where(User.role == "Admin"))).scalar_one()
+                    if int(admins or 0) == 0:
+                        logger.warning("[startup] no admin account exists and ADMIN_BOOTSTRAP_USERNAME/PASSWORD are not set: "
+                                       "run `make setup-admin` (or POST /auth/bootstrap-owner) to create one")
     except Exception as e:
-        print(f"[startup] Auto-bootstrap error: {e}", flush=True)
-        # Don't fail startup if bootstrap fails
+        logger.warning("[startup] admin bootstrap failed: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
     global http_client, redis, engine, _bg_health_task
     
-    # Stop all managed model containers before shutdown
-    print("[shutdown] Stopping all managed model containers...", flush=True)
+    # Managed model containers keep running across gateway restarts unless configured otherwise
     try:
-        if SessionLocal is not None:
-            from sqlalchemy import select as _sel
-            from .models import Model
-            from .docker_manager import stop_container_for_model
-            
-            async with SessionLocal() as session:
-                # Get all running or loading models
-                from sqlalchemy import or_
-                result = await session.execute(_sel(Model).where(or_(Model.state == "running", Model.state == "loading")))
-                running_models = result.scalars().all()
-                
-                for m in running_models:
-                    try:
-                        print(f"[shutdown] Stopping container for model {m.id} ({m.name})...", flush=True)
-                        stop_container_for_model(m)
-                    except Exception as e:
-                        print(f"[shutdown] Failed to stop model {m.id}: {e}", flush=True)
-                
-                # Update all running/loading to stopped state
-                from sqlalchemy import update as _upd
-                await session.execute(_upd(Model).where(or_(Model.state == "running", Model.state == "loading")).values(state="stopped", container_name=None, port=None))
-                await session.commit()
-                print(f"[shutdown] Stopped {len(running_models)} model container(s)", flush=True)
+        await supervisor.shutdown(stop_models=bool(get_settings().STOP_MODELS_ON_SHUTDOWN))
     except Exception as e:
-        print(f"[shutdown] Error stopping model containers: {e}", flush=True)
-    
+        print(f"[shutdown] supervisor shutdown error: {e}", flush=True)
+
     if _bg_health_task:
         _bg_health_task.cancel()
         try:

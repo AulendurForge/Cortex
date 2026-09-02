@@ -200,21 +200,21 @@ export function SpeculativeDecodingExplainer({ isOpen, onClose }: SpeculativeDec
               <ConfigStep
                 step={2}
                 title="Open Speculative Decoding settings"
-                description="In the Startup Config step, expand 'Advanced llama.cpp Configuration', then expand 'Speculative Decoding (Advanced)'."
+                description="In the Core Settings step (llama.cpp), expand the 'Speculative decoding' section."
               />
               <ConfigStep
                 step={3}
                 title="Enter the draft model path"
-                description="Enter the full container path to your draft model file."
+                description="Enter the draft model path relative to the models directory (Cortex maps it to /models/... in the container)."
               >
                 <code className="block mt-2 p-2 bg-black/30 rounded text-purple-300 text-xs">
-                  /models/Mistral-Small-0.5B-DRAFT-GGUF/Mistral-Small-0.5B-Q8_0.gguf
+                  Mistral-Small-0.5B-DRAFT-GGUF/Mistral-Small-0.5B-Q8_0.gguf
                 </code>
               </ConfigStep>
               <ConfigStep
                 step={4}
                 title="(Optional) Tune parameters"
-                description="Adjust 'Draft Tokens' and 'Min Acceptance Probability' if needed. The defaults work well for most cases."
+                description="Adjust 'Draft tokens (max/min)', 'Draft acceptance p_min', the speculative type and the draft model GPU layers if needed. Empty fields use llama.cpp defaults."
               />
             </div>
           </Section>
@@ -223,8 +223,8 @@ export function SpeculativeDecodingExplainer({ isOpen, onClose }: SpeculativeDec
           <Section title="Understanding the Parameters" icon="🎛️">
             <div className="space-y-4">
               <ParameterExplainer
-                name="Draft Model Path"
-                description="The full path to your draft model GGUF file inside the container. The path starts with /models/ because that's where your models directory is mounted."
+                name="Draft model (--model-draft)"
+                description="Path to the draft GGUF relative to the models directory; Cortex mounts that directory at /models inside the container."
                 defaultValue="(none - required)"
                 tips={[
                   "Use a model from the same family as your main model",
@@ -233,19 +233,19 @@ export function SpeculativeDecodingExplainer({ isOpen, onClose }: SpeculativeDec
                 ]}
               />
               <ParameterExplainer
-                name="Draft Tokens (n)"
+                name="Draft tokens max (--spec-draft-n-max)"
                 description="How many tokens the draft model predicts ahead at each step. Higher values mean more aggressive speculation."
-                defaultValue="16"
+                defaultValue="3 (engine default)"
                 tips={[
-                  "8-16 is good for most use cases",
+                  "3-8 is good for most use cases (llama.cpp default is 3)",
                   "Higher values (24-32) can help with predictable text like code",
                   "Lower values (4-8) if you notice many rejected predictions"
                 ]}
               />
               <ParameterExplainer
-                name="Min Acceptance Probability (p_min)"
+                name="Draft acceptance p_min (--spec-draft-p-min)"
                 description="How confident the draft model needs to be before its prediction is considered. Lower = more aggressive, higher = more conservative."
-                defaultValue="0.5"
+                defaultValue="engine default"
                 tips={[
                   "0.5 is a good balance for most cases",
                   "Try 0.3-0.4 for higher throughput (may reduce acceptance rate)",

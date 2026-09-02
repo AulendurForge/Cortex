@@ -448,6 +448,7 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
     # ============================================================================
     model_name = payload.get("model", "")
     v1_warnings: list[str] = []  # V1 compatibility warnings (Gap #7)
+    engine_type = "vllm"  # default for static upstreams not in the registry
     
     if model_name and model_name in _MODEL_REGISTRY:
         entry = _MODEL_REGISTRY.get(model_name) or {}
@@ -567,14 +568,10 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
                     model_name = payload.get("model", "unknown")
                     TIMEOUT_ERRORS.labels(model=model_name, error_type="read_timeout", path=path).inc()
                     raise HTTPException(
-                        status_code=408, 
-                        content={
-                            "error": {
-                                "message": "Request timeout - model is processing but taking longer than expected. Please try again with a shorter prompt or fewer tokens.",
-                                "type": "timeout_error",
-                                "retry_after": 30
-                            }
-                        }
+                        status_code=408,
+                        detail="Request timeout - the model is processing but taking longer than expected. "
+                               "Retry with a shorter prompt or fewer tokens.",
+                        headers={"Retry-After": "30"},
                     )
                 else:
                     raise HTTPException(status_code=502, detail="upstream_unreachable")

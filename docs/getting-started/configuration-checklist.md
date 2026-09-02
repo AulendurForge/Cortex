@@ -57,7 +57,7 @@ make quick-start
 - [ ] No errors during build
 - [ ] All containers start successfully
 - [ ] Output shows detected IP (verify it's correct)
-- [ ] Admin user created (admin/admin)
+- [ ] Admin user created (`make quick-start` asked for the credentials; `make setup-admin` changes them)
 - [ ] URLs are displayed
 
 ### Step 4: Validate Configuration
@@ -86,7 +86,7 @@ curl http://YOUR_IP:8084/health
 - [ ] Can access: `http://YOUR_IP:3001` in browser
 - [ ] Login page loads correctly
 - [ ] No CORS errors in browser console (F12)
-- [ ] Can login with admin/admin
+- [ ] Can login with the admin credentials from `.env`
 
 ### Database
 ```bash
@@ -148,15 +148,14 @@ sudo ufw allow 8084/tcp
 make prod-check
 ```
 
-**Required Changes:**
+**Required** (details in [Production deployment](../operations/production-deployment.md)):
+- [ ] `.env` has `INTERNAL_VLLM_API_KEY`, `SESSION_SECRET`, `ADMIN_BOOTSTRAP_PASSWORD`, `CORS_ALLOW_ORIGINS`
+- [ ] `make prod-check` exits 0 (dev auth off, no `:latest`, pins match `config.py`)
 - [ ] Changed default admin password
-- [ ] Set `GATEWAY_DEV_ALLOW_ALL_KEYS=false` in docker.compose.prod.yaml
-- [ ] Set strong `INTERNAL_VLLM_API_KEY`
-- [ ] Reviewed CORS settings (restrict if needed)
-- [ ] TLS/SSL configured (nginx/traefik reverse proxy)
+- [ ] TLS reverse proxy (Caddy example) serving UI and API from one origin; `SESSION_COOKIE_SECURE=true`
 - [ ] Automated backups configured (cron job)
-- [ ] Firewall rules configured
-- [ ] Regular monitoring set up
+- [ ] Firewall: only the proxy ports exposed
+- [ ] Monitoring targets up (`make monitoring-status`)
 
 ---
 
@@ -354,7 +353,7 @@ Access Cortex at:
 ### ✅ Ready for Production When:
 
 - [ ] All above checks pass
-- [ ] `make prod-check` shows no warnings
+- [ ] `make prod-check` exits 0
 - [ ] Default admin password changed
 - [ ] Dev mode disabled
 - [ ] TLS configured

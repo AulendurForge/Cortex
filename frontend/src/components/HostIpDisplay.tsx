@@ -42,6 +42,8 @@ export function HostIpDisplay({
     }
   };
 
+  const copyIP = () => copyToClipboard(hostIP, 'IP address');
+
   if (!hostIP) return null;
 
   if (variant === 'banner') {

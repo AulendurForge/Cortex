@@ -1,23 +1,35 @@
+# Cortex Prometheus configuration.
+#
+# Prometheus runs on the compose network; the gateway runs on the host network, so it is
+# reached through host.docker.internal (compose adds the extra_hosts entry). Model containers
+# listen on the loopback interface and require the internal API key, so they are scraped
+# THROUGH the gateway: GET /prometheus/sd lists one target per running model and
+# GET /engine-metrics/<model_id> proxies that engine's /metrics with the key. Prometheus needs
+# no Docker socket. See docs/architecture/observability.md.
 global:
   scrape_interval: 10s
+  evaluation_interval: 30s
 
 scrape_configs:
-  # Gateway runs with host network mode, accessible via host.docker.internal
   - job_name: 'gateway'
+    metrics_path: /metrics
     static_configs:
       - targets: ['host.docker.internal:8084']
-  - job_name: 'vllm-gen'
-    static_configs:
-      - targets: ['vllm-gen:8000']
-  - job_name: 'vllm-emb'
-    static_configs:
-      - targets: ['vllm-emb:8000']
+
+  - job_name: 'cortex-models'
+    http_sd_configs:
+      - url: http://host.docker.internal:8084/prometheus/sd
+        refresh_interval: 15s
+
   - job_name: 'node-exporter'
     static_configs:
       - targets: ['node-exporter:9100']
+
   - job_name: 'dcgm-exporter'
     static_configs:
       - targets: ['dcgm-exporter:9400']
+
   - job_name: 'cadvisor'
+    # cadvisor listens on 8080 inside its container (8085 on the host loopback)
     static_configs:
-      - targets: ['cadvisor:8084']
+      - targets: ['cadvisor:8080']

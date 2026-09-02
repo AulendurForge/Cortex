@@ -67,11 +67,11 @@ export default function UsersPage() {
         actions={
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2">
             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 bg-white/5 p-1.5 rounded-xl border border-white/10 glass">
-              <FormField label="Search"><Input size="sm" className="bg-black/20 h-8" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /></FormField>
-              <FormField label="Org"><Select size="sm" className="bg-black/20 h-8" value={String(filters.org_id ?? '')} onChange={(e) => setFilters({ ...filters, org_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All</option>{(orgs.data || []).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></FormField>
-              <FormField label="Role"><Select size="sm" className="bg-black/20 h-8" value={String(filters.role ?? '')} onChange={(e) => setFilters({ ...filters, role: e.target.value || '' })}><option value="">All</option><option>User</option><option>Admin</option></Select></FormField>
-              <FormField label="Status"><Select size="sm" className="bg-black/20 h-8" value={String(filters.status ?? '')} onChange={(e) => setFilters({ ...filters, status: e.target.value || '' })}><option value="">All</option><option>active</option><option>disabled</option></Select></FormField>
-              <FormField label="Sort"><Select size="sm" className="bg-black/20 h-8" value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}><option value="created_at:desc">Newest</option><option value="username:asc">Name</option></Select></FormField>
+              <FormField label="Search"><Input className="bg-black/20 h-8" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} /></FormField>
+              <FormField label="Org"><Select selectSize="sm" className="bg-black/20 h-8" value={String(filters.org_id ?? '')} onChange={(e) => setFilters({ ...filters, org_id: e.target.value ? Number(e.target.value) : '' })}><option value="">All</option>{(orgs.data || []).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></FormField>
+              <FormField label="Role"><Select selectSize="sm" className="bg-black/20 h-8" value={String(filters.role ?? '')} onChange={(e) => setFilters({ ...filters, role: e.target.value || '' })}><option value="">All</option><option>User</option><option>Admin</option></Select></FormField>
+              <FormField label="Status"><Select selectSize="sm" className="bg-black/20 h-8" value={String(filters.status ?? '')} onChange={(e) => setFilters({ ...filters, status: e.target.value || '' })}><option value="">All</option><option>active</option><option>disabled</option></Select></FormField>
+              <FormField label="Sort"><Select selectSize="sm" className="bg-black/20 h-8" value={filters.sort} onChange={(e) => setFilters({ ...filters, sort: e.target.value })}><option value="created_at:desc">Newest</option><option value="username:asc">Name</option></Select></FormField>
             </div>
             <Button variant="cyan" size="sm" onClick={() => setOpen(true)} className="h-11 px-6 font-bold uppercase tracking-widest text-[10px]">
               <span className="mr-2 text-base">👤</span> New User

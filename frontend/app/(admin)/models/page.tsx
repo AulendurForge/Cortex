@@ -2,490 +2,264 @@
 
 import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiFetch from '../../../src/lib/api-clients';
-import { ModelListSchema } from '../../../src/lib/validators';
-import { Card, Table, Button, PageHeader, Badge, InfoBox, SectionTitle } from '../../../src/components/UI';
+import apiFetch, { ApiError, getGatewayBaseUrl } from '../../../src/lib/api-clients';
+import { DryRunResult, DryRunResultSchema, ModelItem, ModelListSchema, ReadinessSchema, RecipeDetailSchema } from '../../../src/lib/validators';
+import { Card, Button, PageHeader, InfoBox, SectionTitle } from '../../../src/components/UI';
 import { Modal } from '../../../src/components/Modal';
 import { ModelWorkflowForm } from '../../../src/components/models/ModelWorkflowForm';
-import { ModelFormValues } from '../../../src/components/models/ModelForm';
+import { ModelFormValues, apiItemToFormValues, recipeToFormValues } from '../../../src/components/models/modelFormValues';
 import { LogsViewer } from '../../../src/components/models/LogsViewer';
 import { DiagnosticBanner } from '../../../src/components/models/DiagnosticBanner';
 import { ConfirmDialog } from '../../../src/components/Confirm';
 import { ResourceCalculatorModal } from '../../../src/components/models/ResourceCalculatorModal';
-import { TestResultsModal } from '../../../src/components/models/TestResultsModal';
+import { TestResultsModal, TestResult } from '../../../src/components/models/TestResultsModal';
 import { SaveRecipeDialog } from '../../../src/components/models/SaveRecipeDialog';
 import { MyRecipesModal } from '../../../src/components/models/MyRecipesModal';
+import { ArchivedModelsTable, ModelsListError, ModelsTable } from '../../../src/components/models/ModelsTable';
+import { describeStartError } from '../../../src/components/models/startErrors';
 import { useUser } from '../../../src/providers/UserProvider';
-import { Tooltip } from '../../../src/components/Tooltip';
 import { useToast } from '../../../src/providers/ToastProvider';
-import { cn } from '../../../src/lib/cn';
-import { safeCopyToClipboard } from '../../../src/lib/clipboard';
+
+type StatusRow = { name?: string; served_model_name?: string; task?: string; state?: string };
+
+function errMsg(e: unknown): string {
+  const a = e as Partial<ApiError> | undefined;
+  return (a && typeof a.message === 'string' && a.message) || String(e);
+}
 
 export default function ModelsPage() {
+  // Resolved on the client only: the SSR pass cannot know the browser's hostname (avoids a hydration mismatch)
+  const [gatewayUrl, setGatewayUrl] = React.useState('');
+  React.useEffect(() => { setGatewayUrl(getGatewayBaseUrl()); }, []);
   const qc = useQueryClient();
   const { user } = useUser();
   const { addToast } = useToast();
-  const isAdmin = (user?.role === 'admin');
+  const isAdmin = user?.role === 'admin';
   const [open, setOpen] = React.useState(false);
   const [logsFor, setLogsFor] = React.useState<number | null>(null);
   const [archiveId, setArchiveId] = React.useState<number | null>(null);
   const [deleteId, setDeleteId] = React.useState<number | null>(null);
   const [configId, setConfigId] = React.useState<number | null>(null);
-  const [calcOpen, setCalcOpen] = React.useState<boolean>(false);
+  const [calcOpen, setCalcOpen] = React.useState(false);
   const [prefill, setPrefill] = React.useState<Partial<ModelFormValues> | null>(null);
-  const [testingId, setTestingId] = React.useState<number | null>(null);
-  const [testResult, setTestResult] = React.useState<any>(null);
-  const [saveRecipeOpen, setSaveRecipeOpen] = React.useState(false);
+  const [prefillKey, setPrefillKey] = React.useState(0);
+  const [testResult, setTestResult] = React.useState<{ id: number; result: TestResult } | null>(null);
   const [saveRecipeModelId, setSaveRecipeModelId] = React.useState<number | null>(null);
   const [myRecipesOpen, setMyRecipesOpen] = React.useState(false);
-  
-  // Track previous model states to detect transitions (loading → running)
+  const [startCheck, setStartCheck] = React.useState<{ id: number; result: DryRunResult } | null>(null);
   const prevStatesRef = React.useRef<Record<number, string>>({});
 
-  const list = useQuery({
+  const list = useQuery<ModelItem[], ApiError>({
     queryKey: ['models', isAdmin],
     queryFn: async () => {
-      try {
-        if (isAdmin) {
-          const raw = await apiFetch<any>('/admin/models');
-          const models = ModelListSchema.parse(raw);
-          
-          // For models in 'loading' state, poll their readiness to trigger state updates
-          // The readiness endpoint auto-updates state to 'running' when model becomes ready
-          for (const m of models) {
-            if ((m as any).state === 'loading') {
-              try {
-                await apiFetch(`/admin/models/${(m as any).id}/readiness`);
-              } catch {
-                // Ignore errors - model may still be loading
-              }
-            }
-          }
-          
-          // Re-fetch to get updated states after readiness checks
-          const updated = await apiFetch<any>('/admin/models');
-          return ModelListSchema.parse(updated);
-        }
-        const raw = await apiFetch<any>('/v1/models/status');
-        const arr = Array.isArray(raw?.data) ? raw.data : [];
-        return arr.map((r: any, idx: number) => ({
-          id: idx + 1,
-          name: r.name || r.served_model_name || '-',
-          served_model_name: r.served_model_name || r.name || '-',
-          task: r.task || 'generate',
-          state: r.state || 'down',
-          archived: false,
+      if (isAdmin) {
+        const models = ModelListSchema.parse(await apiFetch<unknown>('/admin/models'));
+        const loading = models.filter((m) => m.state === 'loading');
+        if (loading.length === 0) return models;
+        const ready = new Set<number>();
+        await Promise.all(loading.map(async (m) => {
+          try {
+            const r = ReadinessSchema.parse(await apiFetch<unknown>(`/admin/models/${m.id}/readiness`));
+            if (r.status === 'ready') ready.add(m.id);
+          } catch { /* still loading */ }
         }));
-      } catch { return [] as any[]; }
+        return models.map((m) => (ready.has(m.id) ? { ...m, state: 'running' as const } : m));
+      }
+      const raw = await apiFetch<{ data?: StatusRow[] }>('/v1/models/status');
+      const arr = Array.isArray(raw?.data) ? raw.data : [];
+      return arr.map((r, idx) => ModelListSchema.element.parse({
+        id: idx + 1, name: r.name || r.served_model_name || '-', served_model_name: r.served_model_name || r.name || '-',
+        task: r.task || 'generate', state: r.state === 'running' ? 'running' : 'stopped', archived: false,
+      }));
     },
     staleTime: 5000,
-    // Poll more frequently when models are in loading state to update UI
     refetchInterval: (query) => {
-      const data = query.state.data as any[];
-      const hasLoading = data?.some((m: any) => m.state === 'loading' || m.state === 'starting');
-      return hasLoading ? 3000 : 15000; // 3s when loading, 15s otherwise
+      const data = query.state.data;
+      const busy = data?.some((m) => m.state === 'loading' || m.state === 'starting' || m.state === 'stopping');
+      return busy ? 3000 : 15000;
     },
   });
+  const models = React.useMemo(() => list.data ?? [], [list.data]);
+  const byId = (id: number | null) => (id == null ? undefined : models.find((m) => m.id === id));
 
-  // Detect state transitions and show appropriate toasts
   React.useEffect(() => {
-    if (!list.data) return;
-    
-    const models = list.data as any[];
-    const prevStates = prevStatesRef.current;
-    
+    const prev = prevStatesRef.current;
     for (const m of models) {
-      const prevState = prevStates[m.id];
-      const currState = m.state;
-      
-      // Show success toast when model transitions from loading → running
-      if (prevState === 'loading' && currState === 'running') {
-        addToast({ 
-          title: `${m.name} is now running!`, 
-          description: 'Model ready for inference requests',
-          kind: 'success' 
-        });
-      }
-      
-      // Show error toast when model transitions from loading → failed
-      if (prevState === 'loading' && currState === 'failed') {
-        addToast({ 
-          title: `${m.name} failed to start`, 
-          description: "Check 'Logs' for error details",
-          kind: 'error' 
-        });
-      }
-      
-      // Update tracked state
-      prevStates[m.id] = currState;
+      if (prev[m.id] === 'loading' && m.state === 'running') addToast({ title: `${m.name} is now running`, description: 'Ready for inference requests', kind: 'success' });
+      if (prev[m.id] === 'loading' && m.state === 'failed') addToast({ title: `${m.name} failed to start`, description: m.state_reason || "Check 'Logs' for details", kind: 'error' });
+      prev[m.id] = m.state;
     }
-  }, [list.data, addToast]);
+  }, [models, addToast]);
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['models'] });
+  const closeAdd = () => { setOpen(false); setPrefill(null); };
 
   const create = useMutation({
-    mutationFn: async (payload: ModelFormValues) => {
-      return await apiFetch('/admin/models', { method: 'POST', body: JSON.stringify(payload) });
-    },
-    onSuccess: () => { 
-      qc.invalidateQueries({ queryKey: ['models'] }); 
-      addToast({ title: 'Model created!', kind: 'success' });
-      setOpen(false); 
-    },
-    onError: (e: any) => addToast({ title: `Error: ${e?.message}`, kind: 'error' })
+    mutationFn: async (body: Record<string, unknown>) => apiFetch('/admin/models', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => { invalidate(); addToast({ title: 'Model created', kind: 'success' }); closeAdd(); },
+    onError: (e: unknown) => { const f = describeStartError(e); addToast({ title: f.title, description: f.description, kind: 'error' }); },
   });
-
   const start = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}/start`, { method: 'POST' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['models'] });
-      addToast({ title: 'Container initialization started', description: "Select 'Logs' to monitor progress", kind: 'info' });
-    },
-    onError: (e: any) => {
-      // Parse error message to provide actionable feedback
-      const errorMsg = e?.message || String(e) || 'Unknown error';
-      let title = 'Failed to start model';
-      let description = errorMsg;
-      
-      // Detect CUDA/driver errors (check for common CUDA error patterns)
-      const lowerMsg = errorMsg.toLowerCase();
-      if (lowerMsg.includes('nvidia-container-cli') || 
-          lowerMsg.includes('unsatisfied condition') && lowerMsg.includes('cuda') ||
-          lowerMsg.includes('cuda') && (lowerMsg.includes('driver') || lowerMsg.includes('version'))) {
-        title = 'NVIDIA Driver Incompatible';
-        // Extract CUDA version if present
-        const cudaMatch = errorMsg.match(/cuda[>=]*\s*([\d.]+)/i);
-        const cudaVersion = cudaMatch ? cudaMatch[1] : 'required version';
-        description = `Container requires CUDA ${cudaVersion}+, but your NVIDIA driver is too old. Update your drivers and reboot.`;
-        addToast({ 
-          title, 
-          kind: 'error',
-          description: description + ' See docs/operations/UPDATE_NVIDIA_DRIVERS.md for instructions.'
-        });
-      } else if (errorMsg.includes('model_path_invalid') || errorMsg.includes('path not found') || errorMsg.includes('Model path not found')) {
-        title = 'Model Path Invalid';
-        // Clean up the error message
-        description = errorMsg.replace(/^model_path_invalid:\s*/i, '').split('\n')[0];
-        addToast({ title, kind: 'error', description });
-      } else if (errorMsg.includes('start_failed')) {
-        title = 'Model Startup Failed';
-        // Extract the actual error, removing the "start_failed:" prefix
-        description = errorMsg.replace(/^start_failed:\s*/i, '').split('\n')[0];
-        // Truncate very long error messages
-        if (description.length > 200) {
-          description = description.substring(0, 200) + '...';
-        }
-        addToast({ 
-          title, 
-          kind: 'error',
-          description: description + ' Check logs for detailed error information.'
-        });
-      } else {
-        // Generic error - truncate if too long
-        if (description.length > 150) {
-          description = description.substring(0, 150) + '...';
-        }
-        addToast({ title, kind: 'error', description });
-      }
-    },
+    onSuccess: () => { invalidate(); addToast({ title: 'Container starting', description: "Open 'Logs' to follow progress", kind: 'info' }); },
+    onError: (e: unknown) => { const f = describeStartError(e); addToast({ title: f.title, description: f.description, kind: 'error' }); },
   });
   const stop = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}/stop`, { method: 'POST' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['models'] });
-      addToast({ title: 'Model stopped', kind: 'success' });
-    },
-    onError: (e: any) => {
-      const errorMsg = e?.message || String(e) || 'Unknown error';
-      addToast({ title: 'Failed to stop model', kind: 'error', description: errorMsg });
-    },
+    onSuccess: () => { invalidate(); addToast({ title: 'Model stopped', kind: 'success' }); },
+    onError: (e: unknown) => addToast({ title: 'Failed to stop model', description: errMsg(e), kind: 'error' }),
   });
   const archive = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}/archive`, { method: 'POST' }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); setArchiveId(null); },
+    onSuccess: () => { invalidate(); setArchiveId(null); addToast({ title: 'Model archived', kind: 'success' }); },
   });
   const del = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}`, { method: 'DELETE' }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); setDeleteId(null); },
+    onSuccess: () => { invalidate(); setDeleteId(null); addToast({ title: 'Model deleted', kind: 'success' }); },
   });
   const apply = useMutation({
-    mutationFn: async ({ id, body }: { id: number; body: any }) => {
+    mutationFn: async ({ id, body }: { id: number; body: Record<string, unknown> }) => {
       await apiFetch(`/admin/models/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
-      return await apiFetch(`/admin/models/${id}/apply`, { method: 'POST' });
+      return apiFetch<{ status?: string; restarted?: boolean; error?: string }>(`/admin/models/${id}/apply`, { method: 'POST' });
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['models'] }); setConfigId(null); },
+    onSuccess: (r) => {
+      invalidate(); setConfigId(null);
+      if (r?.status === 'saved') addToast({ title: 'Configuration saved', description: 'Applies the next time the model starts', kind: 'success' });
+      else if (r?.status === 'failed') addToast({ title: 'Saved, but restart failed', description: r?.error || "Check 'Logs' for details", kind: 'error' });
+      else addToast({ title: 'Configuration saved', description: 'Model is restarting with the new settings', kind: 'info' });
+    },
+    onError: (e: unknown) => { const f = describeStartError(e); addToast({ title: `Save failed: ${f.title}`, description: f.description, kind: 'error' }); },
   });
-
   const testModel = useMutation({
-    mutationFn: async (id: number) => {
-      setTestingId(id);
-      return await apiFetch(`/admin/models/${id}/test`, { method: 'POST' });
+    mutationFn: async (id: number) => ({ id, result: await apiFetch<TestResult>(`/admin/models/${id}/test`, { method: 'POST' }) }),
+    onSuccess: (data) => { setTestResult(data); addToast({ title: data.result.success ? 'Test passed' : 'Test failed', kind: data.result.success ? 'success' : 'error' }); },
+    onError: (e: unknown) => addToast({ title: 'Test failed', description: errMsg(e), kind: 'error' }),
+  });
+  // Pre-start check: run the saved model's dry run; errors open a confirm dialog instead of starting anyway.
+  const startCheckMut = useMutation({
+    mutationFn: async (id: number) => ({ id, result: DryRunResultSchema.parse(await apiFetch<unknown>(`/admin/models/${id}/dry-run`, { method: 'POST' })) }),
+    onSuccess: ({ id, result }) => {
+      if (result.valid) {
+        const est = result.vram_estimate;
+        if (est && typeof est.required_vram_gb !== 'undefined') addToast({ title: 'Pre-flight check passed', description: `Estimated ${String(est.required_vram_gb)} GB per GPU`, kind: 'info' });
+        start.mutate(id);
+      } else {
+        setStartCheck({ id, result });
+      }
     },
-    onSuccess: (data) => {
-      setTestResult(data);
-      addToast({ title: (data as any).success ? 'Test passed!' : 'Test failed', kind: (data as any).success ? 'success' : 'error' });
-      setTestingId(null);
-    },
-    onError: () => { addToast({ title: 'Test failed', kind: 'error' }); setTestingId(null); }
+    onError: (_e, id) => start.mutate(id),
   });
 
-  // Pre-start dry-run check (Gap #12 - VRAM estimation)
-  const dryRun = useMutation({
-    mutationFn: async (id: number) => apiFetch<any>(`/admin/models/${id}/dry-run`, { method: 'POST' }),
-    onSuccess: (data, id) => {
-      // Show VRAM estimate toast and proceed with start
-      if (data.vram_estimate) {
-        const est = data.vram_estimate;
-        const hasWarnings = data.warnings?.some((w: any) => w.severity === 'error');
-        if (hasWarnings) {
-          // Show warning toast with detailed message
-          const errorMsgs = data.warnings.filter((w: any) => w.severity === 'error').map((w: any) => w.title).join('; ');
-          addToast({ 
-            title: 'Configuration Warning', 
-            description: `${errorMsgs}. Est. VRAM: ${est.required_vram_gb}GB/GPU. Starting anyway...`, 
-            kind: 'warning' 
-          });
-        } else {
-          addToast({ 
-            title: 'VRAM Check Passed', 
-            description: `Est. ${est.required_vram_gb}GB/GPU (weights: ${est.model_weights_gb}GB, KV cache: ${est.kv_cache_gb}GB)`, 
-            kind: 'info' 
-          });
-        }
-      }
-      // Proceed with actual start
-      start.mutate(id);
-    },
-    onError: (_, id) => {
-      // If dry-run fails, just start anyway (best effort)
-      start.mutate(id);
+  const loadRecipe = async (recipeId: number) => {
+    try {
+      const detail = RecipeDetailSchema.parse(await apiFetch<unknown>(`/admin/recipes/${recipeId}`));
+      setPrefill(recipeToFormValues(detail));
+      setPrefillKey((k) => k + 1);
+      setOpen(true);
+      addToast({ title: `Recipe "${detail.name}" loaded`, description: 'Review the prefilled settings, then launch', kind: 'success' });
+    } catch (e) {
+      addToast({ title: 'Could not load recipe', description: errMsg(e), kind: 'error' });
     }
-  });
+  };
+
+  const pending = { startingId: start.isPending ? start.variables ?? null : startCheckMut.isPending ? startCheckMut.variables ?? null : null, stoppingId: stop.isPending ? stop.variables ?? null : null, testingId: testModel.isPending ? testModel.variables ?? null : null };
+  const actions = {
+    onLogs: setLogsFor, onRecipe: setSaveRecipeModelId, onTest: (id: number) => testModel.mutate(id), onStart: (id: number) => startCheckMut.mutate(id),
+    onStop: (id: number) => stop.mutate(id), onConfig: setConfigId, onArchive: setArchiveId, onDelete: setDeleteId,
+  };
+  const configModel = byId(configId);
+  const logsModel = byId(logsFor);
 
   return (
     <section className="space-y-4">
-      <PageHeader title="Models & Pools" actions={
-        isAdmin && (
-          <div className="flex items-center gap-2">
-            <Button variant="default" size="sm" onClick={()=>setCalcOpen(true)}><span className="mr-1">🧮</span> Calculator</Button>
-            <Button variant="purple" size="sm" onClick={()=>setMyRecipesOpen(true)}><span className="mr-1">📜</span> Recipes</Button>
-            <Button variant="cyan" size="sm" onClick={()=>setOpen(true)}><span className="mr-1">➕</span> Add Model</Button>
-          </div>
-        )
-      } />
-      
-      <InfoBox variant="blue" title="Connectivity" className="py-2.5">
-        <div className="text-xs text-white/80 mb-1">
-          Endpoint: <code className="bg-white/10 px-1 py-0.5 rounded border border-white/10 font-mono text-[10px]">http://192.168.1.181:8084</code>
+      <PageHeader title="Models & Pools" actions={isAdmin && (
+        <div className="flex items-center gap-2">
+          <Button variant="default" size="sm" onClick={() => setCalcOpen(true)}><span className="mr-1">🧮</span> Calculator</Button>
+          <Button variant="purple" size="sm" onClick={() => setMyRecipesOpen(true)}><span className="mr-1">📜</span> Recipes</Button>
+          <Button variant="cyan" size="sm" onClick={() => { setPrefill(null); setPrefillKey((k) => k + 1); setOpen(true); }}><span className="mr-1">➕</span> Add Model</Button>
         </div>
+      )} />
+
+      <InfoBox variant="blue" title="Connectivity" className="py-2.5">
+        <div className="text-xs text-white/80 mb-1">Endpoint: <code className="bg-white/10 px-1 py-0.5 rounded border border-white/10 font-mono text-[10px]">{gatewayUrl || 'resolving…'}</code></div>
         <a href="/guide?tab=api-keys" className="text-xs font-semibold text-blue-300 hover:text-blue-200 transition-colors">📖 API Guide →</a>
       </InfoBox>
 
-      {/* vLLM Recipes tip */}
-      <Card className="p-3 bg-gradient-to-r from-blue-500/5 to-purple-500/5 border-blue-500/20">
-        <div className="flex items-center gap-3">
-          <span className="text-lg">📚</span>
-          <div className="flex-1">
-            <p className="text-[11px] text-white/70">
-              <strong className="text-white/90">Setting up a vLLM model?</strong>{' '}
-              Check the{' '}
-              <a 
-                href="https://docs.vllm.ai/projects/recipes/en/latest/index.html" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-blue-300 hover:text-blue-200 underline underline-offset-2 font-medium"
-              >
-                vLLM Recipes
-              </a>
-              {' '}for official model-specific parameters and requirements. Not all models are documented—online searching may help for newer architectures.
-            </p>
-          </div>
-          <a 
-            href="https://docs.vllm.ai/projects/recipes/en/latest/index.html" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="shrink-0 px-2.5 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 text-[10px] font-semibold rounded border border-blue-500/30 transition-colors flex items-center gap-1"
-          >
-            <span>Open</span>
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          </a>
-        </div>
-      </Card>
+      {list.isError && <ModelsListError error={list.error} onRetry={() => { void list.refetch(); }} />}
 
       <Card className="p-0 overflow-hidden shadow-xl">
-        <Table>
-          <thead>
-            <tr>
-              <th>Model Name</th><th>Served As</th><th>Task</th><th>Engine</th>{isAdmin && (<><th>GPUs</th><th>DType</th></>)}<th>State</th>{isAdmin && (<th>Actions</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data || []).filter((m:any)=>!m.archived).map((m: any) => (
-              <tr key={m.id} className="group">
-                <td className="font-semibold text-white text-xs">{m.name}</td>
-                <td className="font-mono text-[10px]">
-                  <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 bg-white/5 rounded border border-white/5 group-hover:border-white/10">{m.served_model_name}</span>
-                    <button onClick={async () => { 
-                      const ok = await safeCopyToClipboard(m.served_model_name); 
-                      if (ok) addToast({ title: 'Copied!', kind: 'success' }); 
-                    }} className="p-1 bg-emerald-500/10 text-emerald-400 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                    </button>
-                  </div>
-                </td>
-                <td><Badge className="bg-indigo-500/10 text-indigo-300 border-indigo-500/20 text-[9px]">{m.task}</Badge></td>
-                <td>
-                  <div className="flex items-center gap-1.5">
-                    <Badge className={cn("text-[9px]", m.engine_type === 'llamacpp' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-blue-500/10 text-blue-300')}>
-                      {m.engine_type === 'llamacpp' ? 'llama.cpp' : 'vLLM'}
-                    </Badge>
-                    <Tooltip text={m.engine_type === 'llamacpp' ? 'GGUF engine' : 'Transformers engine'} />
-                  </div>
-                </td>
-                {isAdmin && (<td className="text-[11px]">{m.engine_type === 'llamacpp' && m.tensor_split ? (m.tensor_split.split(',').length) : (m.tp_size ?? '-')}</td>)}
-                {isAdmin && (<td className="text-[11px]">{m.dtype ?? '-'}</td>)}
-                <td><Badge className={cn("text-[9px]", m.state === 'running' ? 'bg-green-500/20 text-green-200' : m.state === 'loading' ? 'bg-cyan-500/20 text-cyan-200 animate-pulse' : m.state === 'starting' ? 'bg-amber-500/20 text-amber-200' : m.state === 'failed' ? 'bg-red-500/20 text-red-200' : 'bg-white/10 text-white/40')}>{m.state?.toUpperCase()}</Badge></td>
-                {isAdmin && (
-                  <td className="text-right">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <Button size="sm" onClick={()=>setLogsFor(m.id)}>Logs</Button>
-                      <Button size="sm" variant="purple" onClick={()=>{ setSaveRecipeModelId(m.id); setSaveRecipeOpen(true); }}>Recipe</Button>
-                      {(m.state === 'running' || m.state === 'loading') && (<Button size="sm" variant="cyan" onClick={()=>testModel.mutate(m.id)} disabled={testingId === m.id || m.state === 'loading'}>Test</Button>)}
-                      {m.state !== 'running' && m.state !== 'loading' ? (
-                        <Button 
-                          size="sm" 
-                          variant="primary" 
-                          onClick={()=>dryRun.mutate(m.id)} 
-                          disabled={(start.isPending && start.variables === m.id) || (dryRun.isPending && dryRun.variables === m.id) || m.state === 'starting'}
-                        >
-                          {(start.isPending && start.variables === m.id) || (dryRun.isPending && dryRun.variables === m.id) || m.state === 'starting' ? '...' : 'Start'}
-                        </Button>
-                      ) : (
-                        <Button 
-                          size="sm" 
-                          variant={m.state === 'loading' ? 'default' : 'danger'} 
-                          onClick={()=>stop.mutate(m.id)} 
-                          disabled={stop.isPending && stop.variables === m.id}
-                        >
-                          {stop.isPending && stop.variables === m.id ? '...' : m.state === 'loading' ? 'Cancel' : 'Stop'}
-                        </Button>
-                      )}
-                      <Button size="sm" onClick={()=>setConfigId(m.id)}>Config</Button>
-                      <Button size="sm" onClick={()=>setArchiveId(m.id)}>Archive</Button>
-                    </div>
-                  </td>
-                )}
-              </tr>
-            ))}
-            {(list.data || []).filter((m:any)=>!m.archived).length === 0 && (
-              <tr><td colSpan={isAdmin ? 8 : 5} className="text-white/20 text-xs py-12 text-center italic font-medium uppercase tracking-[0.2em]">Zero Active Deployments</td></tr>
-            )}
-          </tbody>
-        </Table>
+        <ModelsTable models={models} isAdmin={isAdmin} actions={actions} pending={pending} isLoading={list.isLoading} />
       </Card>
 
-      {isAdmin && (list.data || []).filter((m:any)=>m.archived).length > 0 && (
-      <Card className="p-0 overflow-hidden border-white/5 bg-white/[0.01]">
-        <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]">
-          <SectionTitle variant="blue" className="mb-0 text-[10px]">Vaulted Configurations</SectionTitle>
-        </div>
-        <Table>
-          <thead>
-            <tr><th>Name</th><th>Served As</th><th>Task</th><th>GPUs</th><th>DType</th><th>State</th><th></th></tr>
-          </thead>
-          <tbody>
-            {(list.data || []).filter((m:any)=>m.archived).map((m:any)=>(
-              <tr key={m.id}>
-                <td className="text-xs text-white/60">{m.name}</td>
-                <td className="font-mono text-[9px] text-white/40">{m.served_model_name}</td>
-                <td><Badge className="bg-indigo-500/5 text-indigo-300/50 border-indigo-500/10 text-[8px]">{m.task}</Badge></td>
-                <td className="text-[10px] text-white/40">{m.engine_type === 'llamacpp' && m.tensor_split ? (m.tensor_split.split(',').length) : (m.tp_size ?? '-')}</td>
-                <td className="text-[10px] text-white/40">{m.dtype ?? '-'}</td>
-                <td><Badge className="text-[8px] opacity-50">{m.state}</Badge></td>
-                <td className="text-right">
-                  <div className="flex items-center justify-end gap-1.5">
-                    <Button size="sm" onClick={()=>setLogsFor(m.id)}>Logs</Button>
-                    <Button size="sm" variant="danger" onClick={()=>setDeleteId(m.id)}>Delete</Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      </Card>
+      {isAdmin && models.some((m) => m.archived) && (
+        <Card className="p-0 overflow-hidden border-white/5 bg-white/[0.01]">
+          <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]"><SectionTitle variant="blue" className="mb-0 text-[10px]">Vaulted Configurations</SectionTitle></div>
+          <ArchivedModelsTable models={models.filter((m) => m.archived)} actions={actions} />
+        </Card>
       )}
 
       {isAdmin && (
-      <Modal open={open} onClose={()=>setOpen(false)} title="Add Model" variant="workflow">
-        <ModelWorkflowForm
-          onCancel={()=>setOpen(false)}
-          onSubmit={(v)=>create.mutate(v)}
-          submitLabel={create.isPending ? 'Creating…' : 'Create'}
-          defaults={prefill ?? undefined}
-          fetchBaseDir={async ()=> { try { const r:any = await apiFetch('/admin/models/base-dir'); return r?.base_dir || ''; } catch { return ''; } }}
-          saveBaseDir={async (dir)=> { try { await apiFetch('/admin/models/base-dir', { method: 'PUT', body: JSON.stringify({ base_dir: dir }) }); } catch {} }}
-          listLocalFolders={async (base)=> { try { const r:any = await apiFetch(`/admin/models/local-folders?base=${encodeURIComponent(base)}`); return Array.isArray(r) ? r : []; } catch { return []; } }}
+        <Modal open={open} onClose={closeAdd} title="Add Model" variant="workflow">
+          <ModelWorkflowForm key={`add-${prefillKey}`} onCancel={closeAdd} onSubmit={(body) => create.mutate(body)} submitLabel={create.isPending ? 'Creating…' : 'Launch Model'} submitPending={create.isPending} defaults={prefill ?? undefined} />
+        </Modal>
+      )}
+
+      {isAdmin && (
+        <ResourceCalculatorModal open={calcOpen} onClose={() => setCalcOpen(false)} onApply={(r) => { setCalcOpen(false); if (r?.values) { setPrefill((prev) => ({ ...(prev || {}), ...r.values })); setPrefillKey((k) => k + 1); setOpen(true); } }} />
+      )}
+
+      {isAdmin && (
+        <Modal open={configId != null} onClose={() => setConfigId(null)} title={`Configure ${configModel?.name ?? 'Model'}`} variant="workflow">
+          {configId != null && configModel && (
+            <ModelWorkflowForm key={`config-${configId}`} modelId={configId} defaults={apiItemToFormValues(configModel)} modeLocked onCancel={() => setConfigId(null)} onSubmit={(body) => apply.mutate({ id: configId, body })} submitLabel={apply.isPending ? 'Saving…' : 'Save & Apply'} submitPending={apply.isPending} />
+          )}
+        </Modal>
+      )}
+
+      {isAdmin && (
+        <Modal open={logsFor != null} onClose={() => setLogsFor(null)} title={`Logs · ${logsModel?.name ?? ''}`}>
+          {logsFor != null && (
+            <div className="space-y-3">
+              <DiagnosticBanner modelId={logsFor} modelState={logsModel?.state || 'unknown'} stateReason={logsModel?.state_reason} />
+              <LogsViewer modelId={logsFor} modelName={logsModel?.name} modelState={logsModel?.state} stateReason={logsModel?.state_reason} />
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {isAdmin && (
+        <ConfirmDialog open={archiveId != null} title="Archive Model?" description="Archiving hides this model from the main table; it can be deleted from the vault." pending={archive.isPending} pendingLabel="Archiving…" error={archive.isError ? errMsg(archive.error) : null} onConfirm={() => archiveId != null && archive.mutate(archiveId)} onClose={() => { setArchiveId(null); archive.reset(); }} />
+      )}
+      {isAdmin && (
+        <ConfirmDialog open={deleteId != null} title="Delete Configuration?" description="The model files on disk are preserved; only the Cortex configuration is removed." confirmLabel="Delete" danger pending={del.isPending} pendingLabel="Deleting…" error={del.isError ? errMsg(del.error) : null} onConfirm={() => deleteId != null && del.mutate(deleteId)} onClose={() => { setDeleteId(null); del.reset(); }} />
+      )}
+      {isAdmin && (
+        <ConfirmDialog
+          open={startCheck != null}
+          title="Pre-flight check found errors"
+          confirmLabel="Start anyway"
+          danger
+          pending={start.isPending}
+          pendingLabel="Starting…"
+          description={startCheck && (
+            <ul className="space-y-1 text-xs">
+              {startCheck.result.warnings.map((w, i) => (
+                <li key={i} className={w.severity === 'error' ? 'text-red-200' : 'text-amber-200'}><strong>{w.title || w.severity}:</strong> {w.message}{w.fix ? ` — ${w.fix}` : ''}</li>
+              ))}
+            </ul>
+          )}
+          onConfirm={() => { if (startCheck) { start.mutate(startCheck.id); setStartCheck(null); } }}
+          onClose={() => setStartCheck(null)}
         />
-      </Modal>
       )}
 
-      {isAdmin && (
-      <ResourceCalculatorModal
-        open={calcOpen}
-        onClose={()=>setCalcOpen(false)}
-        onApply={(r)=>{
-          setCalcOpen(false);
-          if (r && r.values) {
-            setPrefill((prev)=>({ ...(prev || {}), ...r.values } as any));
-            setOpen(true);
-          }
-        }}
-      />
+      <TestResultsModal open={!!testResult} onClose={() => setTestResult(null)} result={testResult?.result ?? null} modelName={byId(testResult?.id ?? null)?.name} />
+
+      {isAdmin && saveRecipeModelId != null && (
+        <SaveRecipeDialog open onClose={() => setSaveRecipeModelId(null)} onSuccess={() => qc.invalidateQueries({ queryKey: ['recipes'] })} modelId={saveRecipeModelId} modelName={byId(saveRecipeModelId)?.name || ''} engineType={byId(saveRecipeModelId)?.engine_type || ''} />
       )}
 
-      {isAdmin && (
-      <Modal open={configId != null} onClose={()=>setConfigId(null)} title="Configure Model" variant="workflow">
-        {configId != null && (()=>{
-          const m = (list.data || []).find((x:any)=>x.id===configId) || {};
-          return (
-            <ModelWorkflowForm
-              modelId={configId}
-              defaults={{ ...m, mode: (m.repo_id ? 'online' : 'offline') } as any}
-              modeLocked
-              onCancel={()=>setConfigId(null)}
-              fetchBaseDir={async ()=> { try { const r:any = await apiFetch('/admin/models/base-dir'); return r?.base_dir || ''; } catch { return ''; } }}
-              saveBaseDir={async (dir)=> { try { await apiFetch('/admin/models/base-dir', { method: 'PUT', body: JSON.stringify({ base_dir: dir }) }); } catch {} }}
-              listLocalFolders={async (base)=> { try { const r:any = await apiFetch(`/admin/models/local-folders?base=${encodeURIComponent(base)}`); return Array.isArray(r) ? r : []; } catch { return []; } }}
-              onSubmit={(values)=>apply.mutate({ id: configId, body: values })}
-              submitLabel={apply.isPending ? 'Applying...' : 'Apply & Restart'}
-            />
-          );
-        })()}
-      </Modal>
-      )}
-
-      {isAdmin && (
-      <Modal open={logsFor != null} onClose={()=>setLogsFor(null)} title="Model Logs">
-        {logsFor != null && (
-          <div className="space-y-3">
-            <DiagnosticBanner modelId={logsFor} modelState={list.data?.find((m: any) => m.id === logsFor)?.state || 'unknown'} />
-            <LogsViewer fetcher={async ()=> { try { return await apiFetch(`/admin/models/${logsFor}/logs`); } catch { return 'Logs not available yet.'; } }} />
-          </div>
-        )}
-      </Modal>
-      )}
-
-      {isAdmin && (<ConfirmDialog open={archiveId != null} title="Archive Model?" description="Vaulting will hide this model from primary views." onConfirm={()=> archiveId!=null && archive.mutate(archiveId)} onClose={()=>setArchiveId(null)} />)}
-      {isAdmin && (<ConfirmDialog open={deleteId != null} title="Purge Configuration?" description="Model files on disk will be preserved." onConfirm={()=> deleteId!=null && del.mutate(deleteId)} onClose={()=>setDeleteId(null)} />)}
-      
-      <TestResultsModal open={!!testResult} onClose={()=>setTestResult(null)} result={testResult} modelName={testResult ? list.data?.find((m: any) => m.id === testingId)?.name : undefined} />
-
-      {isAdmin && saveRecipeModelId && (
-        <SaveRecipeDialog open={saveRecipeOpen} onClose={()=>{ setSaveRecipeOpen(false); setSaveRecipeModelId(null); }} onSuccess={()=>qc.invalidateQueries({ queryKey: ['recipes'] })} modelId={saveRecipeModelId} modelName={list.data?.find((m: any) => m.id === saveRecipeModelId)?.name || ''} engineType={list.data?.find((m: any) => m.id === saveRecipeModelId)?.engine_type || ''} />
-      )}
-
-      {isAdmin && (<MyRecipesModal open={myRecipesOpen} onClose={()=>setMyRecipesOpen(false)} onSelectRecipe={async (recipe) => { try { const r = await apiFetch<any>(`/admin/recipes/${recipe.id}`); setPrefill(r); setOpen(true); addToast({ title: 'Blueprint loaded', kind: 'success' }); } catch { addToast({ title: 'Load failed', kind: 'error' }); } }} />)}
+      {isAdmin && <MyRecipesModal open={myRecipesOpen} onClose={() => setMyRecipesOpen(false)} onSelectRecipe={(r) => { void loadRecipe(r.id); }} />}
     </section>
   );
 }

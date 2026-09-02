@@ -75,7 +75,7 @@ async def poll_upstreams_periodically(http_client: httpx.AsyncClient) -> None:
                                     meta["category"] = cat
                                     for mid in ids:
                                         try:
-                                            register_model_endpoint(str(mid), base, cat)
+                                            register_model_endpoint(str(mid), base, cat, authoritative=False)
                                         except Exception:
                                             pass
                                     meta["models"] = ids
@@ -85,7 +85,7 @@ async def poll_upstreams_periodically(http_client: httpx.AsyncClient) -> None:
                 else:
                     meta["last_fail_ts"] = now_ts
                     meta["consecutive_fails"] = int(meta.get("consecutive_fails", 0)) + 1
-                    meta["last_error"] = locals().get("last_error", "error")
+                    meta["last_error"] = last_error if "last_error" in dir() else "error"
                 meta["last_status_code"] = status_code
                 meta["last_latency_ms"] = elapsed_ms
                 # Maintain short history ring buffer (max 50)

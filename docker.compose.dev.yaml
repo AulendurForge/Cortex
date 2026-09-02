@@ -1,8 +1,20 @@
 name: cortex
 
+# Development stack. Image tags default to the values in versions.env; `make up` exports
+# that file so the two never drift. Run `make up` (recommended) or, standalone:
+#   set -a; . ./versions.env; set +a; docker compose -f docker.compose.dev.yaml up -d
+#
+# Optional profiles:  linux -> node-exporter + cadvisor,  gpu -> dcgm-exporter,  tools -> pgadmin
+# Port notes: Prometheus defaults to ${PROM_PORT:-9090}. Cockpit and other tools also use
+# 9090; set PROM_PORT=9094 in .env if that port is taken (the gateway follows PROMETHEUS_URL).
+
+x-restart: &restart
+  restart: unless-stopped
+
 services:
   postgres:
-    image: postgres:16
+    <<: *restart
+    image: ${POSTGRES_IMAGE:-postgres:16}
     environment:
       POSTGRES_USER: cortex
       POSTGRES_PASSWORD: cortex
@@ -10,116 +22,136 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U cortex"], interval: 5s, timeout: 5s, retries: 10 }
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Expose to localhost for gateway (host network mode) to connect
-    # Using non-standard ports to avoid conflicts with system services
+    # Loopback only: the gateway (host network) connects via 127.0.0.1; non-standard port avoids conflicts
     ports:
       - "127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}:5432"
 
   redis:
-    image: redis:7
+    <<: *restart
+    image: ${REDIS_IMAGE:-redis:7}
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10 }
     volumes:
       - redis_data:/data
-    # Expose to localhost for gateway (host network mode) to connect
-    # Using non-standard ports to avoid conflicts with system services
     ports:
       - "127.0.0.1:${CORTEX_REDIS_PORT:-16379}:6379"
 
   gateway:
+    <<: *restart
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # =========================================================================
-    # HOST NETWORK MODE - Universal External Access
-    # =========================================================================
-    # Using host network mode allows ANY Docker container or external application
-    # to reach the Cortex API at http://<HOST_IP>:8084 or http://host.docker.internal:8084
-    # without requiring manual network configuration.
-    #
-    # This is the recommended setup for integration with external applications
-    # like MAGE, LangChain, or any OpenAI-compatible client.
-    # =========================================================================
+    image: cortex-gateway:dev
+    # Host network: the API is reachable at http://<HOST_IP>:8084 from the LAN and at
+    # http://host.docker.internal:8084 from other containers without extra wiring.
     network_mode: host
-    env_file:
-      - ./backend/.env.dev
+    # The entrypoint drops privileges to the `cortex` user and joins the docker socket's group
+    # automatically. Set CORTEX_RUN_AS_ROOT=true to keep the old root behaviour.
     environment:
+      # --- auth (DEV ONLY: accept any bearer token on /v1) ---
+      GATEWAY_DEV_ALLOW_ALL_KEYS: "true"
+      # `make up` generates the secrets and asks for the admin credentials once (scripts/ensure-env.sh);
+      # standalone compose users put them in .env. There are no default passwords.
+      INTERNAL_VLLM_API_KEY: ${INTERNAL_VLLM_API_KEY:?set INTERNAL_VLLM_API_KEY in .env (make up generates it)}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_COOKIE_SECURE: "false"
+      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-}
+      ADMIN_BOOTSTRAP_ORG: ${ADMIN_BOOTSTRAP_ORG:-Default}
+      # --- CORS: browser origins that may call the API with cookies ---
+      CORS_ENABLED: "true"
+      HOST_IP: ${HOST_IP:-localhost}
+      CORS_ALLOW_ORIGINS: http://${HOST_IP:-localhost}:${FRONTEND_PORT:-3001},http://localhost:${FRONTEND_PORT:-3001},http://127.0.0.1:${FRONTEND_PORT:-3001}
+      REQUEST_MAX_BODY_BYTES: ${REQUEST_MAX_BODY_BYTES:-8388608}
+      # --- static upstream pools (optional; managed models register themselves) ---
       VLLM_GEN_URLS: ""
       VLLM_EMB_URLS: ""
-      INTERNAL_VLLM_API_KEY: dev-internal-token
-      GATEWAY_DEV_ALLOW_ALL_KEYS: "true"
-      CORS_ENABLED: "true"
-      # Pass detected host IP to container for CORS configuration
-      HOST_IP: ${HOST_IP:-localhost}
-      # Dynamic CORS origins - with host network, allow from any origin for API access
-      # CORS only affects browser requests; server-to-server requests are unaffected
-      CORS_ALLOW_ORIGINS: http://${HOST_IP:-localhost}:3001,http://localhost:3001,http://127.0.0.1:3001,*
-      # Auto-bootstrap admin user on first startup (dev mode)
-      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
-      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-admin}
-      ADMIN_BOOTSTRAP_ORG: ${ADMIN_BOOTSTRAP_ORG:-Default}
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      # Inside the container, always use the container mount points
+      # --- storage: container paths + the host paths handed to model containers ---
       CORTEX_MODELS_DIR: /var/cortex/models
       HF_CACHE_DIR: /var/cortex/hf-cache
-      # Explicitly pass host paths for Docker-managed vLLM containers
+      CORTEX_EXPORT_DIR: /var/cortex/exports
+      CORTEX_EXPORT_DIR_HOST: ${CORTEX_EXPORT_DIR:-/var/cortex/exports}
+      # Transfer drives (USB/NAS) mounted on the host under /media, /mnt or /run/media are visible
+      # to the Deployment page through these bind mounts (see volumes below)
+      CORTEX_TRANSFER_DIRS: /var/cortex/exports,/host/media,/host/mnt,/host/run/media
+      CORTEX_VERSION: ${CORTEX_VERSION:-0.2.0}
+      CORTEX_INFRA_IMAGES: ${POSTGRES_IMAGE:-postgres:16},${REDIS_IMAGE:-redis:7},${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1},${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2},${DCGM_EXPORTER_IMAGE:-nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04},${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:v0.49.2}
       CORTEX_MODELS_DIR_HOST: ${CORTEX_MODELS_DIR:-/var/cortex/models}
       HF_CACHE_DIR_HOST: ${HF_CACHE_DIR:-/var/cortex/hf-cache}
-      # Keep in sync with backend/src/config.py and scripts/prepare-offline-deployment.sh
-      # NOTE: Qwen3 requires newer Transformers, so default to a compatible image.
-      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
-      # Database and Redis URLs - use localhost since gateway is on host network
-      # Using non-standard ports to avoid conflicts with system services
+      # --- engine images (defaults = versions.env = backend/src/config.py) ---
+      VLLM_IMAGE: ${VLLM_IMAGE:-vllm/vllm-openai:v0.28.0}
+      LLAMACPP_IMAGE: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda-b10731}
+      OFFLINE_MODE: ${OFFLINE_MODE:-false}
+      # --- lifecycle ---
+      STOP_MODELS_ON_SHUTDOWN: ${STOP_MODELS_ON_SHUTDOWN:-false}
+      MODEL_RECONCILE_SEC: ${MODEL_RECONCILE_SEC:-15}
+      # --- infra (loopback because of host networking) ---
       DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/cortex
       REDIS_URL: redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0
-      # Prometheus URL - use localhost
       PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-9090}
-    # Note: 'ports' is not used with network_mode: host - container uses host ports directly
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8084/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
-      - redis
-      - postgres
-    # Gateway does not require GPU; avoid reserving VRAM on dev hosts
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # rw: multipart GGUF handling and exports write here
       - ${CORTEX_MODELS_DIR:-/var/cortex/models}:/var/cortex/models
       - ${HF_CACHE_DIR:-/var/cortex/hf-cache}:/var/cortex/hf-cache
-      # Persist Deployment exports (manifests/images/db dumps) on host
       - ${CORTEX_EXPORT_DIR:-/var/cortex/exports}:/var/cortex/exports
-    # Note: Gateway does not require GPU. Removed device reservations to allow startup on hosts
-    # without NVIDIA runtime. GPU metrics are provided via dcgm-exporter profile when enabled.
-    # Models directory is read-write to allow multi-part GGUF merging
+      # Host mount points for transfer drives (bundles are read from / written to these)
+      - /media:/host/media
+      - /mnt:/host/mnt
+      - /run/media:/host/run/media
+    # The gateway itself needs no GPU; NVML metrics degrade gracefully without the NVIDIA runtime.
 
   frontend:
+    <<: *restart
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: dev
+    image: cortex-frontend:dev
     environment:
-      # Frontend automatically detects gateway URL from browser hostname
-      # No NEXT_PUBLIC_GATEWAY_URL needed - uses dynamic detection
       NODE_ENV: development
-      # Override host IP detection for GUI display
+      # The UI derives the gateway URL from the browser hostname; this only labels the host IP display
       NEXT_PUBLIC_HOST_IP: ${HOST_IP:-localhost}
     ports: ["${FRONTEND_PORT:-3001}:3001"]
     depends_on:
-      - gateway
+      gateway: { condition: service_started }
     volumes:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
 
   prometheus:
-    image: prom/prometheus:latest
+    <<: *restart
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    # Change with PROM_PORT=9094 if 9090 is taken (e.g. Cockpit)
     ports: ["${PROM_PORT:-9090}:9090"]
-    # Enable host.docker.internal resolution for reaching gateway on host network
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on: [gateway]
-    command: ["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.retention.time=7d"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=${PROM_RETENTION:-7d}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   node-exporter:
-    image: prom/node-exporter:latest
+    <<: *restart
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2}
     pid: host
     volumes:
       - /proc:/host/proc:ro
@@ -128,12 +160,14 @@ services:
     command:
       - '--path.procfs=/host/proc'
       - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)' 
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    # Published on loopback so `make health` can probe it; Prometheus scrapes it over the compose network
+    ports: ["127.0.0.1:${NODE_EXPORTER_PORT:-9100}:9100"]
     profiles: ["linux"]
 
   dcgm-exporter:
-    image: nvidia/dcgm-exporter:latest
-    # Request GPU access via Compose devices (works on Docker Desktop with WSL2 GPU support)
+    <<: *restart
+    image: ${DCGM_EXPORTER_IMAGE:-nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04}
     deploy:
       resources:
         reservations:
@@ -147,14 +181,15 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "9400:9400"
+    ports: ["127.0.0.1:${DCGM_PORT:-9400}:9400"]
     profiles: ["gpu"]
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    <<: *restart
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:v0.49.2}
     privileged: true
-    ports: ["8085:8084"]
+    # cadvisor listens on 8080 inside the container
+    ports: ["127.0.0.1:${CADVISOR_PORT:-8085}:8080"]
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -164,21 +199,22 @@ services:
     profiles: ["linux"]
 
   pgadmin:
-    image: dpage/pgadmin4:8.7
+    <<: *restart
+    image: ${PGADMIN_IMAGE:-dpage/pgadmin4:8.7}
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    # Loopback only and opt-in: `make up PROFILES=tools` or COMPOSE_PROFILES=tools
     ports:
-      - "5050:80"
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
     depends_on:
-      - postgres
+      postgres: { condition: service_healthy }
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    profiles: ["tools"]
 
 volumes:
   postgres_data:
   redis_data:
   prometheus_data:
   pgadmin_data:
-
-# Add Grafana and Admin UI later (Phase 4/6)

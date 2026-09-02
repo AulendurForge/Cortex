@@ -81,7 +81,7 @@ export default function EngineGuide() {
               <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider mb-1">Limitations</div>
               <ul className="text-[10px] text-white/60 space-y-1">
                 <li>• Cannot load GPT-OSS models (Harmony architecture)</li>
-                <li>• GGUF support is experimental (single-file only)</li>
+                <li>• Does not serve GGUF files (Cortex routes every GGUF to llama.cpp)</li>
                 <li>• Requires CUDA-capable GPU</li>
               </ul>
             </div>
@@ -197,12 +197,12 @@ export default function EngineGuide() {
               />
               <ComparisonRow 
                 metric="Model formats" 
-                vllm="SafeTensors, GGUF*" 
+                vllm="SafeTensors / HF checkpoints" 
                 llamacpp="GGUF only" 
               />
             </tbody>
           </table>
-          <p className="text-[9px] text-white/40 mt-3">* vLLM GGUF support is experimental and limited to single-file GGUFs</p>
+          <p className="text-[9px] text-white/40 mt-3">GGUF files (single or multi-part) are always served by llama.cpp; the gateway rejects vLLM + GGUF.</p>
         </Card>
       </section>
 
@@ -219,7 +219,7 @@ export default function EngineGuide() {
           <DecisionCard 
             question="Do you have multi-part GGUF files (model-00001-of-00003.gguf)?"
             answer="llama.cpp"
-            explanation="llama.cpp has native support for split GGUF files. vLLM requires single-file GGUFs. You can merge multi-part files with llama-gguf-split, but llama.cpp is easier."
+            explanation="llama.cpp loads split GGUF files natively; Cortex points it at the first part. vLLM is never used for GGUF, so no merge is needed."
             color="emerald"
           />
           <DecisionCard 
