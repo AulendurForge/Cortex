@@ -8,9 +8,23 @@
 'use client';
 
 import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript';
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown';
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
+
+// Only the languages models commonly emit; the full Prism bundle is several hundred KB.
+for (const [name, lang] of Object.entries({ python, py: python, bash, sh: bash, shell: bash, javascript, js: javascript, typescript, ts: typescript, json, yaml, yml: yaml, markdown, md: markdown, sql })) {
+  SyntaxHighlighter.registerLanguage(name, lang);
+}
 import { useState } from 'react';
+import { safeCopyToClipboard } from '../../lib/clipboard';
 
 interface MessageContentProps {
   content: string;
@@ -21,18 +35,7 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback for older browsers
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
+    if (await safeCopyToClipboard(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -40,8 +43,10 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <button
+      type="button"
       onClick={handleCopy}
-      className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 transition-colors text-white/60 hover:text-white"
+      className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 transition-colors text-white/60 hover:text-white focus-visible:opacity-100"
+      aria-label={copied ? 'Copied' : 'Copy code'}
       title="Copy code"
     >
       {copied ? (
@@ -63,13 +68,15 @@ export function MessageContent({ content, isStreaming }: MessageContentProps) {
       <ReactMarkdown
         components={{
           // Code blocks with syntax highlighting
+          // react-markdown v9+ has no `inline` flag: fenced blocks are the multi-line ones or those
+          // with a language class; everything else is inline code.
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
             const codeString = String(children).replace(/\n$/, '');
+            const isBlock = Boolean(match) || codeString.includes('\n');
             
-            // Inline code
-            if (!match) {
+            if (!isBlock) {
               return (
                 <code 
                   className="bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-teal-300" 
@@ -83,7 +90,7 @@ export function MessageContent({ content, isStreaming }: MessageContentProps) {
             // Code block
             return (
               <div className="relative group my-3 not-prose">
-                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity z-10">
                   <CopyButton text={codeString} />
                 </div>
                 <div className="absolute left-3 top-2 text-[10px] text-white/30 font-mono uppercase">
@@ -143,6 +150,10 @@ export function MessageContent({ content, isStreaming }: MessageContentProps) {
                 {children}
               </a>
             );
+          },
+          // Model output must not load third-party images (tracking pixels); show the alt text instead
+          img({ alt }) {
+            return <span className="text-white/50 italic">[image{alt ? `: ${alt}` : ''}]</span>;
           },
           // Blockquotes
           blockquote({ children }) {

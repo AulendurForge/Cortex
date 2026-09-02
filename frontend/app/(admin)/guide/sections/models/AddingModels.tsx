@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function AddingModels() {
   return (
@@ -24,7 +25,7 @@ export default function AddingModels() {
           <p className="text-[12px] text-white/70 leading-relaxed">
             Navigate to <strong className="text-white">Models</strong> in the sidebar, then click the 
             <span className="inline-flex items-center mx-1.5 px-2 py-0.5 bg-cyan-500/20 text-cyan-300 rounded text-[10px] font-bold">
-              ➕ Add Model
+              <span aria-hidden="true" className="mr-1">➕</span>Add Model
             </span>
             button in the top right. This opens a step-by-step wizard that guides you through configuration.
           </p>
@@ -46,7 +47,7 @@ export default function AddingModels() {
           {/* Online Mode */}
           <Card className="p-5 bg-cyan-500/5 border-cyan-500/20 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="text-2xl">🌐</div>
+              <div className="text-2xl" aria-hidden="true">🌐</div>
               <div>
                 <h3 className="text-[13px] font-bold text-cyan-300 uppercase tracking-wider">Online Mode</h3>
                 <p className="text-[10px] text-white/50">Download from HuggingFace Hub</p>
@@ -65,11 +66,11 @@ export default function AddingModels() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Required fields</div>
               <ul className="text-[11px] text-white/70 space-y-1.5">
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">•</span>
+                  <span className="text-cyan-400" aria-hidden="true">•</span>
                   <span><strong>Repo ID:</strong> owner/model-name format</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">•</span>
+                  <span className="text-cyan-400" aria-hidden="true">•</span>
                   <span><strong>HF Token:</strong> Required for gated models (Llama, Mistral, etc.)</span>
                 </li>
               </ul>
@@ -94,7 +95,7 @@ export default function AddingModels() {
           {/* Offline Mode */}
           <Card className="p-5 bg-purple-500/5 border-purple-500/20 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="text-2xl">📁</div>
+              <div className="text-2xl" aria-hidden="true">📁</div>
               <div>
                 <h3 className="text-[13px] font-bold text-purple-300 uppercase tracking-wider">Offline Mode</h3>
                 <p className="text-[10px] text-white/50">Use local model files</p>
@@ -195,8 +196,8 @@ export default function AddingModels() {
                 <li><strong>Served Model Name:</strong> API identifier (e.g., "llama-3.1-8b")</li>
                 <li><strong>Task:</strong> generate (chat) or embed (embeddings)</li>
                 <li><strong>GPUs:</strong> Select which GPUs to use</li>
-                <li><strong>Max Context:</strong> Token limit; empty = the model&apos;s own maximum</li>
-                <li><strong>Memory Utilization:</strong> How much VRAM to use (0.8-0.95)</li>
+                <li><strong>Max model length:</strong> Token limit; empty = the model&apos;s own maximum</li>
+                <li><strong>GPU memory utilization:</strong> Share of each GPU&apos;s VRAM vLLM may reserve; empty = 0.92</li>
                 <li><strong>Everything else:</strong> Empty fields are not sent, so the engine default applies</li>
               </ul>
             </WalkthroughStep>
@@ -329,7 +330,7 @@ export default function AddingModels() {
             >
               <p className="text-[11px] text-white/70 leading-relaxed mb-2">
                 <em>Optional but powerful:</em> In Core Settings, expand <strong>Speculative decoding</strong> and set the draft
-                model (path relative to the models dir), the speculative type and the draft token limits (--spec-draft-n-max/-n-min,
+                model (path relative to the models dir), optionally the speculative type (otherwise inferred from the draft model&apos;s metadata) and the draft token limits (--spec-draft-n-max/-n-min,
                 --spec-draft-p-min, --spec-draft-ngl).
               </p>
             </WalkthroughStep>
@@ -345,23 +346,23 @@ export default function AddingModels() {
             <div className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">✓ Best Practices</div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span>Start with conservative settings (lower context, fewer slots) and scale up</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span>Use the <strong>Calculator</strong> button to estimate VRAM before deployment</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span>Run a <strong>Test</strong> after starting to verify the model responds correctly</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span>Keep served model names simple and URL-safe (lowercase, hyphens)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span>For production, save working configs as <strong>Recipes</strong> for easy redeployment</span>
               </li>
             </ul>
@@ -371,23 +372,23 @@ export default function AddingModels() {
             <div className="text-[10px] font-bold text-red-300 uppercase tracking-wider">✗ Common Pitfalls</div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-red-400">✗</span>
+                <span className="text-red-400" aria-hidden="true">✗</span>
                 <span>Forgetting HF token for gated models (Llama, Mistral)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400">✗</span>
+                <span className="text-red-400" aria-hidden="true">✗</span>
                 <span>Setting context length higher than available VRAM can handle</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400">✗</span>
-                <span>Using vLLM with GPT-OSS models (only llama.cpp works)</span>
+                <span className="text-red-400" aria-hidden="true">✗</span>
+                <span>Serving gpt-oss safetensors on vLLM without the gpt_oss reasoning parser, openai tool parser and mxfp4 quantization (see Engines)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400">✗</span>
+                <span className="text-red-400" aria-hidden="true">✗</span>
                 <span>Trying to serve a GGUF file with vLLM (the gateway rejects it: GGUF is llama.cpp only)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400">✗</span>
+                <span className="text-red-400" aria-hidden="true">✗</span>
                 <span>Launching with dry-run errors ticked away instead of fixed (TP × PP ≠ GPUs, image not cached)</span>
               </li>
             </ul>
@@ -404,9 +405,7 @@ export default function AddingModels() {
         </Link>
       </div>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Model Addition Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Model Addition Guide" />
     </section>
   );
 }

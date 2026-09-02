@@ -1,8 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Badge, BadgeVariant, Button, Card, InfoBox } from '../../../src/components/UI';
-import { cn } from '../../../src/lib/cn';
+import { Badge, BadgeVariant, Button, Card, InfoBox } from '@/components/UI';
+import { cn } from '@/lib/cn';
 import { Job, formatBytes, formatDuration, isJobActive, jobTypeLabel, relativeTime } from './api';
 
 const STATUS_BADGE: Record<Job['status'], BadgeVariant> = {

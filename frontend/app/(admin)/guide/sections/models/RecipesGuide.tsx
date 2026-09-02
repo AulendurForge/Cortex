@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function RecipesGuide() {
   return (
@@ -10,7 +11,7 @@ export default function RecipesGuide() {
       {/* Introduction */}
       <Card className="p-5 bg-gradient-to-r from-purple-500/5 via-violet-500/5 to-indigo-500/5 border-white/5">
         <div className="flex items-center gap-4">
-          <div className="text-4xl">📜</div>
+          <div className="text-4xl" aria-hidden="true">📜</div>
           <div>
             <h2 className="text-[14px] font-bold text-white mb-1">What are Recipes?</h2>
             <p className="text-[13px] text-white/80 leading-relaxed">
@@ -39,7 +40,7 @@ export default function RecipesGuide() {
           <BenefitCard 
             icon="📤"
             title="Sharing"
-            description="Export recipes as JSON to share with team members or across Cortex instances"
+            description="Read a recipe's JSON with GET /admin/recipes/{id} and POST it to another Cortex instance"
           />
           <BenefitCard 
             icon="🛡️"
@@ -75,11 +76,11 @@ export default function RecipesGuide() {
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">3</span>
-                  <span>Enter a descriptive name (e.g., "Llama 3.1 8B - 4 GPU Production")</span>
+                  <span>In the <strong className="text-purple-300">Blueprint Generation</strong> dialog, enter a Blueprint Name (e.g., "Llama 3.1 8B - 4 GPU Production") and an optional Strategy Description</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">4</span>
-                  <span>Click <strong className="text-cyan-300">Save Recipe</strong></span>
+                  <span>Click <strong className="text-cyan-300">Catalog Blueprint</strong></span>
                 </li>
               </ol>
               <p className="text-[10px] text-white/50 italic">
@@ -117,7 +118,7 @@ export default function RecipesGuide() {
         <SectionTitle variant="purple" className="text-[10px]">Using Recipes</SectionTitle>
         <Card className="p-4 bg-purple-500/5 border-purple-500/20 space-y-4">
           <p className="text-[12px] text-white/70 leading-relaxed">
-            Access your saved recipes from the <strong className="text-purple-300">📜 Recipes</strong> button 
+            Access your saved recipes from the <strong className="text-purple-300">Recipes</strong> button 
             in the Models page header.
           </p>
 
@@ -125,13 +126,13 @@ export default function RecipesGuide() {
             {/* Apply a recipe */}
             <div className="p-4 bg-black/30 rounded-lg border border-white/10 space-y-3">
               <div className="text-[11px] font-bold text-white flex items-center gap-2">
-                <span className="text-emerald-400">▶️</span>
+                <span className="text-emerald-400" aria-hidden="true">▶️</span>
                 Applying a Recipe
               </div>
               <ol className="space-y-2 text-[11px] text-white/70">
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">1</span>
-                  <span>Click <strong className="text-purple-300">📜 Recipes</strong> in the page header</span>
+                  <span>Click <strong className="text-purple-300">Recipes</strong> in the page header</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">2</span>
@@ -139,7 +140,7 @@ export default function RecipesGuide() {
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">3</span>
-                  <span>Click <strong className="text-cyan-300">Apply</strong></span>
+                  <span>Click <strong className="text-cyan-300">Load</strong></span>
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">4</span>
@@ -147,7 +148,7 @@ export default function RecipesGuide() {
                 </li>
                 <li className="flex gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold">5</span>
-                  <span>Adjust if needed, then click <strong className="text-emerald-300">Create</strong></span>
+                  <span>Adjust if needed, then click <strong className="text-emerald-300">Launch Model</strong></span>
                 </li>
               </ol>
             </div>
@@ -155,40 +156,40 @@ export default function RecipesGuide() {
             {/* What recipes contain */}
             <div className="p-4 bg-black/30 rounded-lg border border-white/10 space-y-3">
               <div className="text-[11px] font-bold text-white flex items-center gap-2">
-                <span className="text-purple-400">📋</span>
+                <span className="text-purple-400" aria-hidden="true">📋</span>
                 What Recipes Store
               </div>
               <ul className="space-y-1.5 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Engine type (vLLM or llama.cpp)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Mode (Online/Offline) and model source</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Model name and served model name</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Task type (generate/embed)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>GPU allocation and tensor parallelism settings</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Engine-specific configuration (context, memory, etc.)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Request defaults (temperature, penalties, etc.)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Custom startup arguments and environment variables</span>
                 </li>
               </ul>
@@ -220,13 +221,13 @@ export default function RecipesGuide() {
             <RecipeAction 
               icon="🔌"
               title="API"
-              description="GET/POST/PATCH /admin/recipes and POST /admin/recipes/from-model/{id} for automation"
+              description="GET/POST/PATCH/DELETE /admin/recipes/{id} and POST /admin/recipes/from-model/{id} for automation"
               color="emerald"
             />
             <RecipeAction 
               icon="🗑️"
               title="Delete"
-              description="Remove a recipe you no longer need"
+              description="Remove a recipe you no longer need (asks for confirmation). Deleting a model also deletes the recipes saved from it."
               color="red"
             />
           </div>
@@ -273,23 +274,23 @@ export default function RecipesGuide() {
             <div className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">✓ Recommended</div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Use descriptive names</strong> — Include model name, size, and use case</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Test before saving</strong> — Verify the configuration works correctly</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Create environment variants</strong> — "Model-Dev", "Model-Prod" with different settings</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Back up via the API</strong> — <code>GET /admin/recipes/&#123;id&#125;</code> returns the full JSON</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Version your recipes</strong> — "Llama3-v1", "Llama3-v2" when updating</span>
               </li>
             </ul>
@@ -299,19 +300,19 @@ export default function RecipesGuide() {
             <div className="text-[10px] font-bold text-amber-300 uppercase tracking-wider">💡 Tips</div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">💡</span>
+                <span className="text-amber-400" aria-hidden="true">💡</span>
                 <span>Recipes don't store model files—ensure files exist when applying recipes on new servers</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">💡</span>
+                <span className="text-amber-400" aria-hidden="true">💡</span>
                 <span>GPU indices in recipes may need adjustment for different hardware configurations</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">💡</span>
+                <span className="text-amber-400" aria-hidden="true">💡</span>
                 <span>For Online mode recipes, ensure HF token is configured if model is gated</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">💡</span>
+                <span className="text-amber-400" aria-hidden="true">💡</span>
                 <span>Create a "baseline" recipe for each model family, then derive variants</span>
               </li>
             </ul>
@@ -351,14 +352,12 @@ export default function RecipesGuide() {
       <div className="flex gap-3 justify-center pt-4">
         <Link href="/models">
           <Button variant="purple" size="sm" className="text-[10px]">
-            📜 Open Recipes →
+            <span aria-hidden="true" className="mr-1">📜</span>Open Recipes →
           </Button>
         </Link>
       </div>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Recipes Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Recipes Guide" />
     </section>
   );
 }
@@ -367,7 +366,7 @@ export default function RecipesGuide() {
 function BenefitCard({ icon, title, description }: { icon: string; title: string; description: string }) {
   return (
     <Card className="p-4 bg-white/[0.02] border-white/5 hover:border-purple-500/30 transition-all duration-300">
-      <div className="text-2xl mb-2">{icon}</div>
+      <div className="text-2xl mb-2" aria-hidden="true">{icon}</div>
       <div className="text-[11px] font-bold text-white uppercase tracking-wider">{title}</div>
       <div className="text-[10px] text-white/50 mt-1 leading-relaxed">{description}</div>
     </Card>
@@ -383,7 +382,7 @@ function RecipeAction({ icon, title, description, color }: { icon: string; title
   return (
     <div className={cn("p-3 rounded-lg border", colors[color])}>
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-lg">{icon}</span>
+        <span className="text-lg" aria-hidden="true">{icon}</span>
         <span className="text-[11px] font-bold text-white">{title}</span>
       </div>
       <p className="text-[10px] text-white/60">{description}</p>

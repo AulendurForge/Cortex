@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../src/components/UI';
-import { cn } from '../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from './Attribution';
 
 export default function AboutUsage() {
   return (
-    <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-700">
+    <section className="space-y-6 duration-700">
       <header className="space-y-2 text-center md:text-left">
         <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">Usage Analytics</h1>
         <p className="text-white/60 text-sm leading-relaxed max-w-3xl">
@@ -43,7 +44,7 @@ export default function AboutUsage() {
             <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Key Capabilities</div>
             <div className="grid grid-cols-2 gap-2">
               <FeatureItem icon="📊" label="Real-Time Stats" desc="Live dashboard updates" />
-              <FeatureItem icon="🔍" label="Deep Filtering" desc="Model, task, status, key" />
+              <FeatureItem icon="🔍" label="Deep Filtering" desc="Time, model, task, status, key, user, org" />
               <FeatureItem icon="📈" label="Trend Analysis" desc="Time-series charts" />
               <FeatureItem icon="📁" label="CSV Export" desc="Data for external tools" />
             </div>
@@ -87,8 +88,8 @@ export default function AboutUsage() {
             title="Time to First Token"
             description="How long users wait before seeing the first word of a response. Critical for perceived responsiveness in streaming applications."
             examples={[
-              { label: "p50 TTFT", desc: "Typical first-token delay" },
-              { label: "p95 TTFT", desc: "Worst-case user experience" }
+              { label: "p50 / p95", desc: "From Prometheus: streamed requests in the last 5 minutes" },
+              { label: "—", desc: "Shown when no streamed request happened in that window" }
             ]}
             tip="TTFT > 3s feels slow to users. If TTFT is high but overall latency is reasonable, consider prompt caching."
             color="cyan"
@@ -99,7 +100,7 @@ export default function AboutUsage() {
             description="HTTP status codes indicating request outcomes. Use these to track success rates and identify issues."
             examples={[
               { label: "2xx (Success)", desc: "Request completed normally" },
-              { label: "4xx (Client Error)", desc: "Bad request, auth failure, rate limit" },
+              { label: "4xx (Client Error)", desc: "Malformed request (400) or request timeout (408)" },
               { label: "5xx (Server Error)", desc: "Model crash, timeout, internal error" }
             ]}
             tip="A sudden spike in 5xx errors usually indicates model instability. Check container logs for details."
@@ -119,7 +120,7 @@ export default function AboutUsage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <DashboardFeature 
               title="KPI Strip"
-              desc="Four key metrics at a glance: total requests, total tokens, median latency (p50), and median TTFT."
+              desc="Requests, tokens and latency p50 for the filtered window, plus time to first token p50 (Prometheus, streamed requests in the last 5 minutes; '—' without samples)."
               where="Top of page"
             />
             <DashboardFeature 
@@ -139,7 +140,7 @@ export default function AboutUsage() {
             />
             <DashboardFeature 
               title="Filter Panel"
-              desc="Controls for time window, model, task type, status, and pagination. Filters apply to all views."
+              desc="Time window, model, task, status, API key, user and organization. They apply to the KPIs, the charts and the journal; only the TTFT tile is independent."
               where="Below header"
             />
             <DashboardFeature 
@@ -165,7 +166,7 @@ export default function AboutUsage() {
               <div className="space-y-2">
                 <FilterItem 
                   name="Time Window" 
-                  desc="Choose from 1 hour, 6 hours, 24 hours, or 7 days. Longer windows show broader trends but may load slower."
+                  desc="1 h, 6 h, 24 h, 7 d or 30 d. Usage queries and exports reach back at most 30 days."
                 />
                 <FilterItem 
                   name="Model" 
@@ -173,11 +174,15 @@ export default function AboutUsage() {
                 />
                 <FilterItem 
                   name="Task" 
-                  desc="Filter by API endpoint type: Chat, Completions, or Embeddings."
+                  desc="Chat / Completions (recorded as generate) or Embeddings (embed)."
                 />
                 <FilterItem 
                   name="Status" 
                   desc="Show only successes (2xx), client errors (4xx), or server errors (5xx)."
+                />
+                <FilterItem 
+                  name="API key / User / Organization" 
+                  desc="Attribute traffic to a key, a user (Playground traffic carries the signed-in user) or an organization."
                 />
                 <FilterItem 
                   name="Rows" 
@@ -195,7 +200,7 @@ export default function AboutUsage() {
                 />
                 <ScenarioItem 
                   title="Find Heavy Users"
-                  steps="Export data to CSV, then analyze by key_id to see which API keys generate the most traffic."
+                  steps="Filter by API key, user or organization, or export the CSV and group by key_id / user_id / org_id."
                 />
                 <ScenarioItem 
                   title="Compare Model Performance"
@@ -222,7 +227,7 @@ export default function AboutUsage() {
                 matching your current filters. This data can be imported into spreadsheets, BI tools, or billing systems.
               </p>
               <InfoBox variant="purple" className="text-[11px] p-3">
-                <strong>Export includes:</strong> ID, timestamp, API key ID, model, task, prompt tokens, completion tokens, 
+                <strong>Export includes:</strong> ID, timestamp, API key ID, user ID, org ID, model, task, prompt tokens, completion tokens, 
                 total tokens, latency (ms), status code, and request ID.
               </InfoBox>
             </div>
@@ -230,19 +235,19 @@ export default function AboutUsage() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Export Use Cases</div>
               <ul className="space-y-1.5 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400 mt-0.5">◆</span>
+                  <span className="text-purple-400 mt-0.5" aria-hidden="true">◆</span>
                   <span><strong className="text-white/90">Cost allocation:</strong> Sum tokens by org_id or user_id for billing</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400 mt-0.5">◆</span>
+                  <span className="text-purple-400 mt-0.5" aria-hidden="true">◆</span>
                   <span><strong className="text-white/90">SLA reporting:</strong> Calculate percentile latencies over time</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400 mt-0.5">◆</span>
+                  <span className="text-purple-400 mt-0.5" aria-hidden="true">◆</span>
                   <span><strong className="text-white/90">Capacity planning:</strong> Analyze peak request rates and token volumes</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400 mt-0.5">◆</span>
+                  <span className="text-purple-400 mt-0.5" aria-hidden="true">◆</span>
                   <span><strong className="text-white/90">Incident review:</strong> Export error records for postmortem analysis</span>
                 </li>
               </ul>
@@ -284,19 +289,19 @@ export default function AboutUsage() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Best For</div>
               <ul className="space-y-1.5 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">→</span>
+                  <span className="text-cyan-400" aria-hidden="true">→</span>
                   <span>Monitoring during load tests</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">→</span>
+                  <span className="text-cyan-400" aria-hidden="true">→</span>
                   <span>Watching traffic after a new deployment</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">→</span>
+                  <span className="text-cyan-400" aria-hidden="true">→</span>
                   <span>Real-time error detection</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">→</span>
+                  <span className="text-cyan-400" aria-hidden="true">→</span>
                   <span>Demonstrating system activity</span>
                 </li>
               </ul>
@@ -330,9 +335,9 @@ export default function AboutUsage() {
                   <td className="py-2 px-3 text-white/50">Cluster patterns or gaps in activity</td>
                 </tr>
                 <tr className="border-b border-white/5">
-                  <td className="py-2 px-3 font-mono text-cyan-300">Key</td>
-                  <td className="py-2 px-3">API key prefix (first 8 chars)</td>
-                  <td className="py-2 px-3 text-white/50">Identify which key made the request</td>
+                  <td className="py-2 px-3 font-mono text-cyan-300">Who</td>
+                  <td className="py-2 px-3">API key prefix, or the user for Playground traffic (hover for the organization)</td>
+                  <td className="py-2 px-3 text-white/50">Identify who made the request</td>
                 </tr>
                 <tr className="border-b border-white/5">
                   <td className="py-2 px-3 font-mono text-white/90">Model</td>
@@ -341,7 +346,7 @@ export default function AboutUsage() {
                 </tr>
                 <tr className="border-b border-white/5">
                   <td className="py-2 px-3"><Badge className="bg-indigo-500/10 text-indigo-300 border-indigo-500/20 text-[8px]">Task</Badge></td>
-                  <td className="py-2 px-3">chat, completions, or embeddings</td>
+                  <td className="py-2 px-3">chat/completions or embeddings</td>
                   <td className="py-2 px-3 text-white/50">API endpoint used</td>
                 </tr>
                 <tr className="border-b border-white/5">
@@ -350,12 +355,12 @@ export default function AboutUsage() {
                   <td className="py-2 px-3 text-white/50">Unusually high values may indicate runaway prompts</td>
                 </tr>
                 <tr className="border-b border-white/5">
-                  <td className="py-2 px-3 font-mono text-white/60">Lat</td>
+                  <td className="py-2 px-3 font-mono text-white/60">Latency</td>
                   <td className="py-2 px-3">Latency in milliseconds</td>
                   <td className="py-2 px-3 text-white/50">High values indicate slow responses</td>
                 </tr>
                 <tr className="border-b border-white/5">
-                  <td className="py-2 px-3"><Badge className="bg-emerald-500/10 text-emerald-400 text-[8px]">Stat</Badge></td>
+                  <td className="py-2 px-3"><Badge className="bg-emerald-500/10 text-emerald-400 text-[8px]">Status</Badge></td>
                   <td className="py-2 px-3">HTTP status code</td>
                   <td className="py-2 px-3 text-white/50">Non-2xx indicates errors</td>
                 </tr>
@@ -390,7 +395,7 @@ export default function AboutUsage() {
               "Set the time window to your billing period (e.g., 7 days)",
               "Click Export to download the CSV file",
               "Open in Excel/Sheets and sum the total_tokens column",
-              "Group by key_id or model for per-user/per-model costs"
+              "Group by key_id, user_id, org_id or model for per-team costs"
             ]}
             color="purple"
           />
@@ -424,7 +429,7 @@ export default function AboutUsage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <TipItem 
               title="Regular Exports"
-              tip="Export usage data weekly or monthly for long-term trend analysis. The database retains data indefinitely, but exports create permanent records."
+              tip="Export usage data weekly or monthly for long-term trend analysis. Queries and exports only reach back 30 days, so exports are your long-term record."
             />
             <TipItem 
               title="Monitor Error Rates"
@@ -461,7 +466,7 @@ export default function AboutUsage() {
             />
             <TroubleshootItem 
               issue="Tokens always show zero"
-              solution="Some models or request types may not report token counts. Check that your requests include model responses with usage data."
+              solution="Streamed responses are metered when the stream ends, with the engine's real token counts. A zero means the engine returned no usage block—check the model's logs."
             />
             <TroubleshootItem 
               issue="Latency seems too high"
@@ -493,6 +498,8 @@ export default function AboutUsage() {
           </Link>
         </div>
       </Card>
+
+      <Attribution label="Cortex Usage Analytics Guide" />
     </section>
   );
 }
@@ -502,7 +509,7 @@ export default function AboutUsage() {
 function FeatureItem({ icon, label, desc }: { icon: string; label: string; desc: string }) {
   return (
     <div className="flex items-start gap-2 p-2 bg-white/[0.02] rounded-lg border border-white/5">
-      <span className="text-base">{icon}</span>
+      <span className="text-base" aria-hidden="true">{icon}</span>
       <div>
         <div className="text-[11px] font-semibold text-white/90">{label}</div>
         <div className="text-[10px] text-white/50">{desc}</div>
@@ -634,7 +641,7 @@ function TipItem({ title, tip }: { title: string; tip: string }) {
 function TroubleshootItem({ issue, solution }: { issue: string; solution: string }) {
   return (
     <div className="flex items-start gap-3 p-3 bg-white/[0.02] rounded-lg border border-white/5">
-      <span className="text-amber-400 text-sm mt-0.5">⚠</span>
+      <span className="text-amber-400 text-sm mt-0.5" aria-hidden="true">⚠</span>
       <div className="space-y-1">
         <div className="text-[11px] font-semibold text-white">{issue}</div>
         <div className="text-[10px] text-white/60">{solution}</div>

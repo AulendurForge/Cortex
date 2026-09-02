@@ -1,8 +1,8 @@
 'use client';
 
 import React from 'react';
-import { InfoBox } from '../../../src/components/UI';
-import { cn } from '../../../src/lib/cn';
+import { InfoBox } from '@/components/UI';
+import { cn } from '@/lib/cn';
 
 /** Numbered step heading used by both wizards. */
 export function StepHeader({ n, title, hint, done = false }: { n: number; title: string; hint?: React.ReactNode; done?: boolean }) {

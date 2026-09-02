@@ -1,7 +1,8 @@
 'use client';
 
-import { Card, SectionTitle, InfoBox, Badge } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function EngineGuide() {
   return (
@@ -23,7 +24,7 @@ export default function EngineGuide() {
           <Card className="p-5 bg-blue-500/5 border-blue-500/20 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="text-3xl">🚀</div>
+                <div className="text-3xl" aria-hidden="true">🚀</div>
                 <div>
                   <h3 className="text-lg font-black text-blue-300 uppercase tracking-wider">vLLM</h3>
                   <p className="text-[10px] text-white/50">High-Performance Inference</p>
@@ -55,23 +56,23 @@ export default function EngineGuide() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Best For</div>
               <ul className="text-[11px] text-white/70 space-y-1.5">
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">✓</span>
+                  <span className="text-blue-400" aria-hidden="true">✓</span>
                   <span>Standard HuggingFace models (Llama 3, Mistral, Qwen, Phi, Gemma)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">✓</span>
+                  <span className="text-blue-400" aria-hidden="true">✓</span>
                   <span>High throughput requirements (50-70+ tokens/sec per stream)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">✓</span>
+                  <span className="text-blue-400" aria-hidden="true">✓</span>
                   <span>Many concurrent users (40+ simultaneous requests)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">✓</span>
+                  <span className="text-blue-400" aria-hidden="true">✓</span>
                   <span>SafeTensors format models</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">✓</span>
+                  <span className="text-blue-400" aria-hidden="true">✓</span>
                   <span>Embedding models (nomic-embed, BGE, E5)</span>
                 </li>
               </ul>
@@ -80,7 +81,7 @@ export default function EngineGuide() {
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
               <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider mb-1">Limitations</div>
               <ul className="text-[10px] text-white/60 space-y-1">
-                <li>• Cannot load GPT-OSS models (Harmony architecture)</li>
+                <li>• Needs a full checkpoint folder (config.json, tokenizer files, safetensors)</li>
                 <li>• Does not serve GGUF files (Cortex routes every GGUF to llama.cpp)</li>
                 <li>• Requires CUDA-capable GPU</li>
               </ul>
@@ -91,7 +92,7 @@ export default function EngineGuide() {
           <Card className="p-5 bg-emerald-500/5 border-emerald-500/20 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="text-3xl">🦙</div>
+                <div className="text-3xl" aria-hidden="true">🦙</div>
                 <div>
                   <h3 className="text-lg font-black text-emerald-300 uppercase tracking-wider">llama.cpp</h3>
                   <p className="text-[10px] text-white/50">GGUF & Specialized Models</p>
@@ -106,8 +107,8 @@ export default function EngineGuide() {
                 description="First-class support for quantized GGUF models, including multi-part files"
               />
               <EngineFeature 
-                feature="GPT-OSS Compatible"
-                description="Only engine that can load GPT-OSS 120B/20B Harmony architecture"
+                feature="CPU + GPU Hybrid"
+                description="Keep some layers on the CPU when the model does not fit in VRAM"
               />
               <EngineFeature 
                 feature="Aggressive Quantization"
@@ -123,23 +124,23 @@ export default function EngineGuide() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Best For</div>
               <ul className="text-[11px] text-white/70 space-y-1.5">
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
-                  <span><strong className="text-yellow-300">GPT-OSS 120B/20B models</strong> (vLLM cannot load these)</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
+                  <span>GGUF quantizations of any model, including gpt-oss GGUF conversions</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>GGUF-only models (no HuggingFace checkpoint)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Multi-part GGUF files (split models)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Custom/experimental architectures</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Memory-constrained deployments (aggressive quantization)</span>
                 </li>
               </ul>
@@ -211,10 +212,10 @@ export default function EngineGuide() {
         <SectionTitle variant="purple" className="text-[10px]">Decision Guide</SectionTitle>
         <div className="space-y-3">
           <DecisionCard 
-            question="Is your model a GPT-OSS (Harmony architecture) model?"
-            answer="llama.cpp"
-            explanation="vLLM cannot load GPT-OSS models. Only llama.cpp supports the Harmony architecture used by GPT-OSS 120B and 20B."
-            color="emerald"
+            question="Is your model gpt-oss (the safetensors release of openai/gpt-oss-20b or -120b)?"
+            answer="vLLM"
+            explanation="vLLM v0.28.0 serves gpt-oss natively: set Reasoning parser to gpt_oss, Tool call parser to openai and Quantization to mxfp4 (the vLLM Recipes site has the full settings). GGUF conversions of gpt-oss go to llama.cpp like every other GGUF."
+            color="blue"
           />
           <DecisionCard 
             question="Do you have multi-part GGUF files (model-00001-of-00003.gguf)?"
@@ -255,24 +256,24 @@ export default function EngineGuide() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4 bg-purple-500/5 border-purple-500/20 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xl">📦</span>
+              <span className="text-xl" aria-hidden="true">📦</span>
               <h4 className="text-[12px] font-bold text-purple-300 uppercase tracking-wider">GGUF Format</h4>
             </div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span><strong>Pre-quantized</strong> — Quantization (Q4_K_M, Q8_0, etc.) is baked into the file</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span><strong>Single or split files</strong> — Can be one file or multiple parts for large models</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span><strong>Self-contained</strong> — Model architecture info embedded in file</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span><strong>Offline only</strong> — Must be pre-downloaded; no HuggingFace streaming</span>
               </li>
             </ul>
@@ -283,24 +284,24 @@ export default function EngineGuide() {
 
           <Card className="p-4 bg-blue-500/5 border-blue-500/20 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xl">🔐</span>
+              <span className="text-xl" aria-hidden="true">🔐</span>
               <h4 className="text-[12px] font-bold text-blue-300 uppercase tracking-wider">SafeTensors Format</h4>
             </div>
             <ul className="text-[11px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-blue-400">•</span>
+                <span className="text-blue-400" aria-hidden="true">•</span>
                 <span><strong>Full precision</strong> — Weights stored in original dtype (FP16/BF16)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-blue-400">•</span>
+                <span className="text-blue-400" aria-hidden="true">•</span>
                 <span><strong>Quantize on-load</strong> — vLLM can apply AWQ, GPTQ, FP8, INT8 at runtime</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-blue-400">•</span>
+                <span className="text-blue-400" aria-hidden="true">•</span>
                 <span><strong>HuggingFace native</strong> — Streaming download from HuggingFace Hub</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-blue-400">•</span>
+                <span className="text-blue-400" aria-hidden="true">•</span>
                 <span><strong>Config files required</strong> — Needs config.json, tokenizer files</span>
               </li>
             </ul>
@@ -316,7 +317,7 @@ export default function EngineGuide() {
         <SectionTitle variant="blue" className="text-[10px]">vLLM Resources</SectionTitle>
         <Card className="p-4 bg-gradient-to-r from-blue-500/5 to-purple-500/5 border-blue-500/20 space-y-3">
           <div className="flex items-start gap-3">
-            <div className="text-2xl">📚</div>
+            <div className="text-2xl" aria-hidden="true">📚</div>
             <div className="flex-1 space-y-2">
               <h4 className="text-[12px] font-bold text-blue-300">vLLM Recipes — Official Model Guides</h4>
               <p className="text-[11px] text-white/70 leading-relaxed">
@@ -331,7 +332,7 @@ export default function EngineGuide() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 text-[10px] font-semibold rounded-lg border border-blue-500/30 transition-colors"
                 >
-                  <span>🔗</span> vLLM Recipes Site
+                  <span aria-hidden="true">🔗</span> vLLM Recipes Site
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                   </svg>
@@ -358,9 +359,7 @@ export default function EngineGuide() {
         analyzes whether you have SafeTensors, single-file GGUFs, or multi-part GGUFs and suggests accordingly.
       </InfoBox>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Engine Selection Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Engine Selection Guide" />
     </section>
   );
 }
@@ -369,7 +368,7 @@ export default function EngineGuide() {
 function EngineFeature({ feature, description }: { feature: string; description: string }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-white/30 mt-1">◆</span>
+      <span className="text-white/30 mt-1" aria-hidden="true">◆</span>
       <div>
         <span className="text-[11px] font-semibold text-white">{feature}</span>
         <span className="text-[10px] text-white/50 ml-1.5">— {description}</span>

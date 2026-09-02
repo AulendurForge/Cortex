@@ -3,11 +3,11 @@
 import React from 'react';
 import Link from 'next/link';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Card, InfoBox, Input, Select, Table, FormField } from '../../../src/components/UI';
-import { ConfirmDialog } from '../../../src/components/Confirm';
-import { useToast } from '../../../src/providers/ToastProvider';
-import { cn } from '../../../src/lib/cn';
-import type { ApiError } from '../../../src/lib/api-clients';
+import { Badge, Button, Card, InfoBox, Input, Select, Table, FormField } from '@/components/UI';
+import { ConfirmDialog } from '@/components/Confirm';
+import { useToast } from '@/providers/ToastProvider';
+import { cn } from '@/lib/cn';
+import type { ApiError } from '@/lib/api-clients';
 import {
   BundleOk, CONFLICT_STRATEGIES, ConflictStrategy, DbDumpInfo, ImportArtifactsSchema, ImportRequest, JobController, QK, ScanResult,
   errMsg, fetchDbDumpInfo, formatBytes, isBundleOk, isScanModelOk, relativeTime, scanBundle, startDbRestore, startImport, useLocations,

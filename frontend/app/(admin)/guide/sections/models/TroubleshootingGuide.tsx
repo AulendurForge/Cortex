@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function TroubleshootingGuide() {
   return (
@@ -26,37 +27,37 @@ export default function TroubleshootingGuide() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Are GPUs detected? Check <Link href="/health" className="text-cyan-300 underline">Health page</Link></span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Is there enough free VRAM for the model?</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Is Docker running and accessible?</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Can Cortex reach the model files (volume mounted)?</span>
               </li>
             </ul>
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>For Online mode: Is HF token set for gated models?</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>For Offline mode: Do model files exist at the path?</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Is another model already using the same GPUs?</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">□</span>
+                <span className="text-cyan-400" aria-hidden="true">□</span>
                 <span>Have you checked the container logs?</span>
               </li>
             </ul>
@@ -152,11 +153,11 @@ export default function TroubleshootingGuide() {
               "Docker not configured for GPU access"
             ]}
             solutions={[
-              "Update NVIDIA drivers (see docs/operations/UPDATE_NVIDIA_DRIVERS.md)",
+              "Update the NVIDIA driver: 580+ for vLLM v0.28.0 (CUDA 13), 570+ for llama.cpp b10731 (CUDA 12.8); see docs/operations/UPDATE_NVIDIA_DRIVERS.md",
               "Install nvidia-container-toolkit if missing",
               "Verify driver: nvidia-smi should show GPUs",
               "Reboot after driver updates",
-              "Check Docker GPU config: docker run --gpus all nvidia/cuda:12.0-base nvidia-smi"
+              "Check Docker GPU access: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi"
             ]}
             color="red"
           />
@@ -166,16 +167,16 @@ export default function TroubleshootingGuide() {
             issue="Model architecture not supported"
             symptoms={[
               "vLLM error: 'Model architecture not supported'",
-              "Error loading GPT-OSS or Harmony models",
+              "Error loading a recently released architecture",
               "Unknown model type errors"
             ]}
             causes={[
               "Using vLLM with a model it doesn't support",
-              "GPT-OSS models require llama.cpp",
+              "gpt-oss started on vLLM without its parser/quantization settings",
               "Custom architecture without trust_remote_code"
             ]}
             solutions={[
-              "For GPT-OSS 120B/20B: Switch to llama.cpp engine (only option)",
+              "For gpt-oss safetensors: use vLLM with reasoning parser gpt_oss, tool-call parser openai and quantization mxfp4; GGUF conversions run on llama.cpp",
               "For custom architectures: Enable 'Trust remote code' in vLLM",
               "Check vLLM supported model list in their documentation",
               "Consider converting model to GGUF format for llama.cpp"
@@ -220,7 +221,7 @@ export default function TroubleshootingGuide() {
             ]}
             solutions={[
               "Disable Flash Attention for older GPUs (RTX 20xx and earlier)",
-              "For vLLM: Set Attention backend to auto, TRITON_ATTN or TORCH_SDPA",
+              "For vLLM: leave Attention backend unset, or pick TRITON_ATTN / TORCH_SDPA",
               "For llama.cpp: Set Flash attention to 'off' (and keep the V cache at f16)",
               "Check GPU compute capability: nvidia-smi --query-gpu=compute_cap"
             ]}
@@ -233,17 +234,17 @@ export default function TroubleshootingGuide() {
             symptoms={[
               "Only part of model loads",
               "Error about missing parts",
-              "vLLM fails with split GGUF files"
+              "Start rejected with gguf_requires_llamacpp"
             ]}
             causes={[
-              "vLLM doesn't support multi-part GGUF (experimental)",
+              "GGUF chosen under vLLM (the gateway rejects it)",
               "Missing parts in the sequence",
               "Parts not in same directory"
             ]}
             solutions={[
-              "Use llama.cpp for multi-part GGUF (native support)",
+              "Use llama.cpp: it loads split GGUF files natively when pointed at the first part",
               "Ensure all parts are present: -00001-of-00003.gguf through -00003-of-00003.gguf",
-              "Or merge parts using llama-gguf-split --merge",
+              "No merge step is needed",
               "Verify part count matches the 'of-XXXX' in filename"
             ]}
             color="emerald"
@@ -271,28 +272,6 @@ export default function TroubleshootingGuide() {
             ]}
             color="blue"
           />
-
-          {/* Port Conflicts */}
-          <TroubleshootCard 
-            issue="Container port conflicts"
-            symptoms={[
-              "Error: 'Port already in use'",
-              "Model starts but isn't accessible",
-              "Multiple models failing on same GPU"
-            ]}
-            causes={[
-              "Another container using the same internal port",
-              "Orphaned container from previous run",
-              "Port mapping conflict"
-            ]}
-            solutions={[
-              "Check for orphaned containers: docker ps -a | grep cortex",
-              "Remove stuck containers: docker rm -f <container_id>",
-              "Cortex auto-assigns ports—usually not a manual config",
-              "Restart Cortex backend if ports remain stuck"
-            ]}
-            color="amber"
-          />
         </div>
       </section>
 
@@ -308,8 +287,8 @@ export default function TroubleshootingGuide() {
             />
             <CommandBlock 
               title="Check Docker Containers"
-              command="docker ps -a | grep -E 'vllm|llama'"
-              description="Lists all Cortex model containers and their status"
+              command="docker ps -a --filter label=cortex.managed=1"
+              description="Lists every Cortex-managed engine container (vllm-model-<id> / llamacpp-model-<id>) and its status; remove a stuck one with docker rm -f"
             />
             <CommandBlock 
               title="View Container Logs"
@@ -328,7 +307,7 @@ export default function TroubleshootingGuide() {
             />
             <CommandBlock 
               title="Check Disk Space"
-              command="df -h /path/to/models"
+              command="df -h /var/cortex/models"
               description="Ensures sufficient space for model files and cache"
             />
           </div>
@@ -349,23 +328,23 @@ export default function TroubleshootingGuide() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Collect This Information</div>
               <ul className="text-[11px] text-white/70 space-y-1.5">
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Full container logs (click Logs, copy all)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Model configuration (engine, mode, settings)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>GPU info (nvidia-smi output)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Cortex version and engine versions</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-purple-400">•</span>
+                  <span className="text-purple-400" aria-hidden="true">•</span>
                   <span>Steps to reproduce the issue</span>
                 </li>
               </ul>
@@ -375,15 +354,15 @@ export default function TroubleshootingGuide() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Resources</div>
               <ul className="text-[11px] text-white/70 space-y-1.5">
                 <li className="flex items-start gap-2">
-                  <span className="text-cyan-400">📖</span>
+                  <span className="text-cyan-400" aria-hidden="true">📖</span>
                   <span><a href="https://docs.vllm.ai" target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">vLLM Documentation</a></span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">🦙</span>
-                  <span><a href="https://github.com/ggerganov/llama.cpp" target="_blank" rel="noopener noreferrer" className="text-emerald-300 underline">llama.cpp GitHub</a></span>
+                  <span className="text-emerald-400" aria-hidden="true">🦙</span>
+                  <span><a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer" className="text-emerald-300 underline">llama.cpp GitHub</a></span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-blue-400">🐳</span>
+                  <span className="text-blue-400" aria-hidden="true">🐳</span>
                   <span><a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/overview.html" target="_blank" rel="noopener noreferrer" className="text-blue-300 underline">NVIDIA Container Toolkit</a></span>
                 </li>
               </ul>
@@ -406,9 +385,7 @@ export default function TroubleshootingGuide() {
         </Link>
       </div>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Troubleshooting Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Troubleshooting Guide" />
     </section>
   );
 }
@@ -456,7 +433,7 @@ function TroubleshootCard({
             <ul className="space-y-1 text-[10px] text-white/60">
               {symptoms.map((s, i) => (
                 <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-white/30 mt-0.5">•</span>
+                  <span className="text-white/30 mt-0.5" aria-hidden="true">•</span>
                   <span>{s}</span>
                 </li>
               ))}
@@ -469,7 +446,7 @@ function TroubleshootCard({
             <ul className="space-y-1 text-[10px] text-white/60">
               {causes.map((c, i) => (
                 <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-amber-400 mt-0.5">?</span>
+                  <span className="text-amber-400 mt-0.5" aria-hidden="true">?</span>
                   <span>{c}</span>
                 </li>
               ))}
@@ -482,7 +459,7 @@ function TroubleshootCard({
             <ul className="space-y-1 text-[10px] text-white/70">
               {solutions.map((s, i) => (
                 <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-emerald-400 mt-0.5">→</span>
+                  <span className="text-emerald-400 mt-0.5" aria-hidden="true">→</span>
                   <span>{s}</span>
                 </li>
               ))}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Card, Button } from '../../src/components/UI';
+import { Card, Button } from '@/components/UI';
 
 /**
  * Error boundary for every admin route.  A bad stored value or a schema

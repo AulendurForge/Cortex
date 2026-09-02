@@ -34,9 +34,16 @@ export function Modal({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
+  // Keep the latest onClose in a ref so parents may pass inline lambdas: the focus-trap effect
+  // must run only when the dialog opens/closes, never on every parent re-render (that used to
+  // steal focus from the field being edited every time a poll updated the page).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     openerRef.current = (document.activeElement as HTMLElement | null) ?? null;
     const panel = panelRef.current;
     // Focus the first focusable element (skip the close button when there is content to reach).
@@ -46,7 +53,7 @@ export function Modal({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab' || !panelRef.current) return;
@@ -61,9 +68,10 @@ export function Modal({
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
       openerRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -93,21 +101,21 @@ export function Modal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-300">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 duration-300">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity" onClick={onClose} aria-hidden />
 
       {variant === 'fullscreen' ? (
-        <div {...panelProps} className="relative w-full h-full glass rounded-3xl shadow-2xl text-white overflow-hidden flex flex-col border border-white/10 animate-in zoom-in-95 duration-300 outline-none">
+        <div {...panelProps} className="relative w-full h-full glass rounded-3xl shadow-2xl text-white overflow-hidden flex flex-col border border-white/10 duration-300 outline-none">
           {header('px-4 py-3 border-b border-white/5 bg-white/[0.02] flex items-center justify-between shrink-0', 'text-sm font-bold uppercase tracking-widest text-white/90')}
           <div className="flex-1 overflow-auto p-4 custom-scrollbar">{children}</div>
         </div>
       ) : variant === 'workflow' ? (
-        <div {...panelProps} className="relative glass rounded-[2rem] shadow-2xl max-w-6xl w-full text-white min-h-[70vh] h-[85vh] max-h-[900px] overflow-hidden flex flex-col border border-white/10 animate-in zoom-in-95 duration-300 outline-none">
+        <div {...panelProps} className="relative glass rounded-[2rem] shadow-2xl max-w-6xl w-full text-white min-h-[70vh] h-[85vh] max-h-[900px] overflow-hidden flex flex-col border border-white/10 duration-300 outline-none">
           {header('px-6 py-3.5 border-b border-white/5 bg-white/[0.02] flex items-center justify-between shrink-0', 'text-sm font-black uppercase tracking-[0.2em] text-white/90 italic', true)}
           <div className="flex-1 overflow-hidden flex flex-col">{children}</div>
         </div>
       ) : (
-        <div {...panelProps} className={cn('relative glass rounded-2xl shadow-2xl max-w-2xl w-full mx-2 text-white max-h-[92vh] overflow-hidden flex flex-col border border-white/10 animate-in zoom-in-95 duration-300 outline-none')}>
+        <div {...panelProps} className={cn('relative glass rounded-2xl shadow-2xl max-w-2xl w-full mx-2 text-white max-h-[92vh] overflow-hidden flex flex-col border border-white/10 duration-300 outline-none')}>
           {header('px-4 py-3 border-b border-white/5 bg-white/[0.02] flex items-center justify-between shrink-0', 'text-sm font-bold uppercase tracking-widest text-white/90')}
           <div className="flex-1 overflow-auto p-4 custom-scrollbar">{children}</div>
         </div>

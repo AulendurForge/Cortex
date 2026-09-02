@@ -189,6 +189,8 @@ async def archive_model(model_id: int):
     SessionLocal = _session_factory()
     async with SessionLocal() as session:
         m = await _load(session, model_id)
+        if (m.state or "stopped") not in ("stopped", "failed"):
+            raise HTTPException(status_code=409, detail=f"stop the model before archiving it (state: {m.state})")
         m.archived = True
         await session.commit()
         return {"status": "archived"}

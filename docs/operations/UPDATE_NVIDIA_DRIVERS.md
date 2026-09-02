@@ -8,7 +8,7 @@ Cortex uses Docker containers for running vLLM and llama.cpp inference engines. 
 
 1. **Container Startup Failures**: Containers fail to start with errors like:
    ```
-   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9
+   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.0
    ```
 
 2. **GPU Access Denied**: Containers cannot access GPUs even though they're available
@@ -21,21 +21,24 @@ Cortex uses Docker containers for running vLLM and llama.cpp inference engines. 
 
 ### How It Works
 
-- **CUDA Version in Container**: vLLM/llama.cpp Docker images are built with specific CUDA versions (e.g., CUDA 12.9)
+- **CUDA Version in Container**: the pinned images are built with specific CUDA versions (vLLM v0.28.0: CUDA 13; llama.cpp b10731: CUDA 12.8)
 - **Host Driver Requirement**: The host NVIDIA driver must support the CUDA version used in the container
 - **Backward Compatibility**: Newer drivers support older CUDA versions, but older drivers cannot support newer CUDA versions
 
 ### Current Requirements
 
-**For CUDA 12.9+ (used by latest vLLM/llama.cpp images)**:
-- **Linux**: NVIDIA driver **575.51.03** or newer
-- **Windows**: NVIDIA driver **576.02** or newer
+The engine images are pinned in `versions.env`:
 
-**For CUDA 12.8**:
-- **Linux**: NVIDIA driver **525.60.13** or newer
-- **Windows**: NVIDIA driver **528.33** or newer
+| Image | CUDA | Minimum Linux driver |
+|-------|------|----------------------|
+| `vllm/vllm-openai:v0.28.0` (default `VLLM_IMAGE`) | 13 | **580** |
+| `vllm/vllm-openai:v0.28.0-cu129` (set `VLLM_IMAGE` for drivers 550–579) | 12.9 | 550 |
+| `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` (`LLAMACPP_IMAGE`) | 12.8 | **570** |
 
-> **Note**: Always check the specific CUDA version required by your vLLM/llama.cpp Docker images. Newer images may require CUDA 12.9+, while older images may work with CUDA 12.8.
+So: driver **580 or newer** runs everything as shipped. On 550–579 keep llama.cpp as is and set
+`VLLM_IMAGE=vllm/vllm-openai:v0.28.0-cu129` in `.env`; below 570 llama.cpp will not start either.
+
+> **Note**: If you override the images in `versions.env`, check the CUDA version of the image you pick.
 
 ## Checking Your Current Driver Version
 
@@ -57,7 +60,7 @@ nvidia-smi --query-gpu=cuda_version --format=csv,noheader
 - **Driver Version**: The installed NVIDIA driver version (e.g., `570.195.03`)
 - **CUDA Version**: The maximum CUDA version your driver supports (e.g., `12.8`)
 
-If your driver supports CUDA 12.8 but the container requires CUDA 12.9+, you need to update.
+If your driver supports only CUDA 12.8 (driver 570–579) the default vLLM image (CUDA 13) will not start: update to 580+ or use the `-cu129` image.
 
 ## Updating NVIDIA Drivers on Linux
 
@@ -76,11 +79,11 @@ sudo apt update
 # 3. Check what versions are available
 apt-cache search nvidia-driver | grep "^nvidia-driver-[0-9]"
 
-# 4. Install driver 575 or newer (replace with your preferred version)
-sudo apt install nvidia-driver-575
+# 4. Install driver 580 or newer (replace with your preferred version)
+sudo apt install nvidia-driver-580
 
 # Or install the "open" version (for open-source kernel modules)
-sudo apt install nvidia-driver-575-open
+sudo apt install nvidia-driver-580-open
 
 # 5. Reboot system
 sudo reboot
@@ -92,8 +95,8 @@ sudo reboot
 # 1. Enable EPEL repository
 sudo dnf install epel-release
 
-# 2. Install NVIDIA driver (version 575 or newer)
-sudo dnf install nvidia-driver-575
+# 2. Install NVIDIA driver (version 580 or newer)
+sudo dnf install nvidia-driver-580
 
 # 3. Reboot system
 sudo reboot
@@ -106,8 +109,8 @@ sudo reboot
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
 sudo dnf install https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
 
-# 2. Install NVIDIA driver
-sudo dnf install nvidia-driver-575
+# 2. Install NVIDIA driver (580 or newer)
+sudo dnf install nvidia-driver-580
 
 # 3. Reboot system
 sudo reboot
@@ -128,7 +131,7 @@ sudo reboot
 
 ### Method 2: Direct Download from NVIDIA
 
-If your distribution doesn't have driver 575+ in repositories:
+If your distribution doesn't have driver 580+ in repositories:
 
 ```bash
 # 1. Download driver from NVIDIA website
@@ -163,14 +166,14 @@ sudo reboot
 After rebooting:
 
 ```bash
-# Check driver version (should show 575.x or higher)
+# Check driver version (should show 580.x or higher)
 nvidia-smi
 
-# Verify CUDA version support (should show 12.9 or higher)
+# Verify CUDA version support (should show 13.0 or higher)
 nvidia-smi --query-gpu=cuda_version --format=csv,noheader
 
 # Test GPU access in Docker
-docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ## After Driver Update
@@ -231,20 +234,20 @@ python3 scripts/test_offline_models.py <model_id>
 
 ### CUDA Version Still Shows Old Version
 
-**Symptom**: `nvidia-smi` shows CUDA 12.8 after updating to driver 575+
+**Symptom**: `nvidia-smi` shows an older CUDA version than you expected after updating the driver
 
-**Explanation**: This is normal! `nvidia-smi` shows the **maximum CUDA version your driver supports**, not what's installed. Docker containers will use CUDA 12.9 from the container image.
+**Explanation**: `nvidia-smi` shows the **maximum CUDA version your driver supports**, not what's installed. Docker containers bring their own CUDA runtime (13 for vLLM v0.28.0, 12.8 for llama.cpp b10731); the driver only has to be new enough. If it still reports below 13.0 on a 580+ driver, the old kernel module is still loaded: reboot.
 
 **Verification**: Test with Docker:
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ### Container Still Fails After Driver Update
 
 **Check**:
-1. Driver version: `nvidia-smi` should show 575.x or higher
-2. Docker GPU access: `docker run --rm --gpus all nvidia/cuda:12.9.0-base-ubuntu22.04 nvidia-smi`
+1. Driver version: `nvidia-smi` should show 580.x or higher (570.x is enough for llama.cpp only)
+2. Docker GPU access: `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi`
 3. Container logs: `docker logs <container-name>`
 
 **Common causes**:
@@ -258,14 +261,16 @@ If the new driver causes issues:
 
 ```bash
 # Ubuntu/Debian
-sudo apt remove nvidia-driver-575
+sudo apt remove nvidia-driver-580
 sudo apt install nvidia-driver-570  # or your previous version
 sudo reboot
 
 # RHEL/Fedora
-sudo dnf remove nvidia-driver-575
+sudo dnf remove nvidia-driver-580
 sudo dnf install nvidia-driver-570  # or your previous version
 sudo reboot
+
+# On 550-579 the default vLLM image will not start; set VLLM_IMAGE=vllm/vllm-openai:v0.28.0-cu129 in .env
 ```
 
 ## GPU Compatibility Notes
@@ -273,13 +278,13 @@ sudo reboot
 ### vLLM Requirements
 
 - **Compute Capability**: 7.0 or higher (V100, T4, RTX 20xx/30xx/40xx, A100, L4, H100, etc.)
-- **CUDA**: 11.8+ (latest images use CUDA 12.9+)
-- **Driver**: Must support the CUDA version in the vLLM Docker image
+- **CUDA**: the pinned `vllm/vllm-openai:v0.28.0` image is a CUDA 13 build (driver 580+); `v0.28.0-cu129` is CUDA 12.9
+- **Driver**: 580+ for the default image, 550+ for the `-cu129` image
 
 ### llama.cpp Requirements
 
 - **CUDA Support**: Requires CUDA-enabled build (server-cuda image)
-- **Driver**: Must support CUDA version in llama.cpp Docker image
+- **Driver**: 570+ (`ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` is a CUDA 12.8 build)
 - **GPU Layers**: Can run on CPU (ngl=0) but GPU acceleration requires compatible driver
 
 ## Best Practices
@@ -297,15 +302,14 @@ sudo reboot
 - **CUDA Toolkit Archive**: https://developer.nvidia.com/cuda-toolkit-archive
 - **CUDA Release Notes**: https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/
 - **vLLM GPU Installation**: https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html
-- **llama.cpp CUDA Support**: https://github.com/ggerganov/llama.cpp
+- **llama.cpp CUDA Support**: https://github.com/ggml-org/llama.cpp
 
 ## Quick Reference
 
-| CUDA Version | Minimum Driver (Linux) | Minimum Driver (Windows) |
-|--------------|------------------------|---------------------------|
-| 12.9+        | 575.51.03              | 576.02                    |
-| 12.8         | 525.60.13              | 528.33                    |
-| 12.7         | 525.60.13              | 528.33                    |
-| 12.6         | 525.60.13              | 528.33                    |
+| Engine image (pinned in `versions.env`) | CUDA | Minimum Linux driver |
+|------------------------------------------|------|----------------------|
+| `vllm/vllm-openai:v0.28.0`               | 13   | 580                  |
+| `vllm/vllm-openai:v0.28.0-cu129`         | 12.9 | 550                  |
+| `ghcr.io/ggml-org/llama.cpp:server-cuda-b10731` | 12.8 | 570           |
 
-> **Note**: Always check the specific requirements for your vLLM/llama.cpp Docker image version. Newer images may require CUDA 12.9+, while older images may work with CUDA 12.8.
+> **Note**: Cortex is tested on Ubuntu 22.04 / 24.04 and RHEL 9 with Docker Engine 24+. If you change an image tag, check its CUDA version.

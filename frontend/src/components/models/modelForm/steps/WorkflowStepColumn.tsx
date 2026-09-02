@@ -84,7 +84,7 @@ export function WorkflowStepColumn({
             </div>
             <div className="flex items-center gap-2">{header}</div>
           </header>
-          <div className="flex-1 space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">{children}</div>
+          <div className="flex-1 space-y-6 duration-300">{children}</div>
         </div>
       )}
     </div>

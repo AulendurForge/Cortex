@@ -152,7 +152,7 @@ async def get_host_trends(settings, minutes: int = 15, step_s: int = 15) -> Host
     """
     global _trends_cache
     
-    minutes = max(1, min(int(minutes), 60))
+    minutes = max(1, min(int(minutes), 24 * 60))   # up to 24 h of Prometheus range data
     step_s = max(5, min(int(step_s), 60))
     now = time.monotonic()
     ttl = 5.0

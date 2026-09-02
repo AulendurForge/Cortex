@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../src/components/UI';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
 import { useState, useEffect } from 'react';
-import { useToast } from '../../../../src/providers/ToastProvider';
-import { cn } from '../../../../src/lib/cn';
-import { safeCopyToClipboard } from '../../../../src/lib/clipboard';
+import { useToast } from '@/providers/ToastProvider';
+import { cn } from '@/lib/cn';
+import { safeCopyToClipboard } from '@/lib/clipboard';
+import { Attribution } from './Attribution';
 
 export default function ApiKeys() {
   const { addToast } = useToast();
@@ -28,7 +29,7 @@ export default function ApiKeys() {
   };
 
   return (
-    <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-700">
+    <section className="space-y-6 duration-700">
       <header className="space-y-2 text-center md:text-left">
         <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">API Key Management</h1>
         <p className="text-white/60 text-sm leading-relaxed max-w-3xl">
@@ -121,10 +122,13 @@ export default function ApiKeys() {
             <p className="text-[12px] text-white/70 leading-relaxed">
               API keys are the primary authentication mechanism for Cortex's OpenAI-compatible API. Every request 
               to <code className="bg-white/10 px-1 py-0.5 rounded text-cyan-300">/v1/*</code> endpoints requires 
-              a valid Bearer token. As an administrator, you control who gets access and what they can do.
+              a Bearer API key, with two exceptions: a signed-in console session cookie is accepted too (that is how the Chat
+              Playground calls <code className="bg-white/10 px-1 py-0.5 rounded text-cyan-300">/v1</code>), and the dev stack sets{' '}
+              <code className="bg-white/10 px-1 py-0.5 rounded text-cyan-300">GATEWAY_DEV_ALLOW_ALL_KEYS=true</code>, which lets requests without any key through.
+              As an administrator, you control who gets access and what they can do.
             </p>
             <InfoBox variant="blue" className="text-[11px] p-3">
-              <strong>Key Principle:</strong> Each API key is hashed (SHA-256) before storage. The full token is 
+              <strong>Key Principle:</strong> Each API key is hashed with bcrypt before storage. The full token is 
               only shown <strong>once</strong> at creation. If lost, the key must be revoked and a new one issued.
             </InfoBox>
           </div>
@@ -223,7 +227,7 @@ export default function ApiKeys() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-4">
             <p className="text-[12px] text-white/70 leading-relaxed">
-              Navigate to <strong className="text-white">Admin → API Keys</strong> to provision new keys. 
+              Navigate to <strong className="text-white">Admin → All API Keys</strong> to provision new keys. 
               You can assign keys to specific users and organizations for usage tracking and accountability.
             </p>
             
@@ -231,7 +235,7 @@ export default function ApiKeys() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Steps to Create a Key</div>
               <ol className="space-y-2 text-[11px] text-white/80">
                 <StepItem num={1}>
-                  Click <strong>"New Key"</strong> in the API Keys page
+                  Click <strong>New key</strong> on the All API Keys page
                 </StepItem>
                 <StepItem num={2}>
                   Configure <strong>Scopes</strong>:
@@ -250,7 +254,7 @@ export default function ApiKeys() {
                   <strong>Optional:</strong> Set an expiration date for temporary access
                 </StepItem>
                 <StepItem num={6}>
-                  Click <strong>"Create Key"</strong> and immediately copy the token
+                  Click <strong>Create key</strong> and immediately copy the token
                 </StepItem>
               </ol>
             </div>
@@ -287,12 +291,12 @@ export default function ApiKeys() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">Token Format</div>
               <div className="p-3 bg-black/40 rounded-xl border border-white/10">
                 <code className="text-[11px] text-emerald-400 font-mono break-all">
-                  ctx_xxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxx
+                  Ab3dE9fGhIjKlMnOpQrStUvWxYz0123456789AbC
                 </code>
               </div>
               <div className="text-[10px] text-white/50 leading-relaxed">
-                Keys use a <strong className="text-white/70">ctx_</strong> prefix followed by an 8-character 
-                identifier (shown in the UI) and a secure random suffix (hidden after creation).
+                Keys are 40 random letters and digits with no prefix. The first 8 characters are the 
+                prefix shown in the keys table; the full token is shown only once, at creation.
               </div>
             </Card>
           </div>
@@ -328,9 +332,12 @@ export default function ApiKeys() {
             </div>
 
             <InfoBox variant="blue" className="text-[11px] p-3">
-              <strong>Note:</strong> When using a reverse proxy (nginx, Traefik), ensure the proxy 
+              <strong>Note:</strong> Entries are comma-separated (exact IPs or CIDR ranges); the host&apos;s own IP is added automatically and invalid
+              entries are rejected with 422. When using a reverse proxy (nginx, Traefik), ensure the proxy 
               forwards the real client IP via <code className="bg-black/30 px-1 rounded">X-Forwarded-For</code> 
-              or <code className="bg-black/30 px-1 rounded">X-Real-IP</code> headers.
+              or <code className="bg-black/30 px-1 rounded">X-Real-IP</code> headers <strong>and</strong> list the proxy&apos;s address in{' '}
+              <code className="bg-black/30 px-1 rounded">TRUSTED_PROXY_IPS</code> on the gateway. Those headers are ignored from any other peer,
+              so a forged header cannot bypass an allowlist.
             </InfoBox>
           </Card>
 
@@ -368,7 +375,7 @@ export default function ApiKeys() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="p-4 bg-white/[0.02] border-white/5 lg:col-span-2 space-y-4">
             <p className="text-[12px] text-white/70 leading-relaxed">
-              Cortex supports user self-service key management. When users log into the admin UI, 
+              Every signed-in user gets a <strong className="text-white">My API Keys</strong> page. When users log into the console, 
               they can create and manage their own API keys without admin intervention. This reduces 
               your operational burden while maintaining security through automatic user attribution.
             </p>
@@ -378,19 +385,19 @@ export default function ApiKeys() {
                 <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">Self-Service Benefits</div>
                 <ul className="space-y-1.5 text-[11px] text-white/70">
                   <li className="flex items-start gap-2">
-                    <span className="text-emerald-400">✓</span>
+                    <span className="text-emerald-400" aria-hidden="true">✓</span>
                     <span>Users can generate keys on-demand</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-emerald-400">✓</span>
+                    <span className="text-emerald-400" aria-hidden="true">✓</span>
                     <span>Automatic user_id attribution for tracking</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-emerald-400">✓</span>
+                    <span className="text-emerald-400" aria-hidden="true">✓</span>
                     <span>Users can revoke their own compromised keys</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-emerald-400">✓</span>
+                    <span className="text-emerald-400" aria-hidden="true">✓</span>
                     <span>Reduces admin ticket volume</span>
                   </li>
                 </ul>
@@ -399,19 +406,19 @@ export default function ApiKeys() {
                 <div className="text-[10px] uppercase font-bold text-amber-300 tracking-wider">Admin Controls</div>
                 <ul className="space-y-1.5 text-[11px] text-white/70">
                   <li className="flex items-start gap-2">
-                    <span className="text-amber-400">◆</span>
+                    <span className="text-amber-400" aria-hidden="true">◆</span>
                     <span>View all keys across all users</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-amber-400">◆</span>
+                    <span className="text-amber-400" aria-hidden="true">◆</span>
                     <span>Revoke any key if necessary</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-amber-400">◆</span>
+                    <span className="text-amber-400" aria-hidden="true">◆</span>
                     <span>Filter keys by user, org, or prefix</span>
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-amber-400">◆</span>
+                    <span className="text-amber-400" aria-hidden="true">◆</span>
                     <span>Monitor usage per key/user/org</span>
                   </li>
                 </ul>
@@ -425,12 +432,12 @@ export default function ApiKeys() {
               <div className="space-y-1">
                 <div className="text-white font-semibold">Admin Endpoints</div>
                 <code className="text-[10px] text-cyan-300 block">/admin/keys</code>
-                <div className="text-white/50">Full CRUD access to all keys</div>
+                <div className="text-white/50">Admins: list, create and revoke any key (All API Keys)</div>
               </div>
               <div className="space-y-1">
                 <div className="text-white font-semibold">Self-Service Endpoints</div>
                 <code className="text-[10px] text-cyan-300 block">/admin/me/keys</code>
-                <div className="text-white/50">Users manage only their own keys</div>
+                <div className="text-white/50">Any signed-in user: list, create and revoke their own keys (My API Keys)</div>
               </div>
             </div>
           </Card>
@@ -455,7 +462,7 @@ export default function ApiKeys() {
                   <MetricItem label="Key ID" desc="Which key made the request" />
                   <MetricItem label="User/Org" desc="Attribution for billing" />
                   <MetricItem label="Model" desc="Which model was used" />
-                  <MetricItem label="Task Type" desc="chat / completions / embeddings" />
+                  <MetricItem label="Task Type" desc="generate (chat & completions) or embed" />
                   <MetricItem label="Token Counts" desc="Prompt + completion tokens" />
                   <MetricItem label="Latency" desc="Response time in ms" />
                   <MetricItem label="Status Code" desc="Success (2xx) or errors" />
@@ -512,7 +519,7 @@ export default function ApiKeys() {
                 <StateItem 
                   state="Revoked"
                   color="red"
-                  description="Key was manually disabled by admin—cannot be re-enabled"
+                  description="Key was revoked by an admin or its owner—cannot be re-enabled (tick 'show revoked' to list it)"
                 />
               </div>
             </div>
@@ -521,23 +528,23 @@ export default function ApiKeys() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">When to Revoke</div>
               <ul className="space-y-1.5 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span>Key exposed in public repository or logs</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span>User leaves the organization</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span>Suspicious activity detected in usage logs</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span>Key hasn't been used in 90+ days (cleanup)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span>Project or integration is decommissioned</span>
                 </li>
               </ul>
@@ -546,7 +553,7 @@ export default function ApiKeys() {
 
           <Card className="p-4 bg-red-500/5 border-red-500/20 space-y-4">
             <div className="flex items-center gap-2">
-              <span className="text-red-400 text-lg">⚠️</span>
+              <span className="text-red-400 text-lg" aria-hidden="true">⚠️</span>
               <div className="text-[11px] font-bold text-red-200 uppercase tracking-wider">Revocation Is Permanent</div>
             </div>
             <p className="text-[12px] text-white/70 leading-relaxed">
@@ -561,10 +568,10 @@ export default function ApiKeys() {
                   Identify the key prefix in the API Keys table
                 </StepItem>
                 <StepItem num={2}>
-                  Click <strong>"Revoke"</strong> (appears on hover)
+                  Click <strong>Revoke</strong> in the key&apos;s row
                 </StepItem>
                 <StepItem num={3}>
-                  Confirm the action in the dialog
+                  Confirm with <strong>Revoke key</strong> in the dialog
                 </StepItem>
                 <StepItem num={4}>
                   Notify affected users to update their integrations
@@ -625,7 +632,7 @@ export default function ApiKeys() {
       - "host.docker.internal:host-gateway"
     environment:
       OPENAI_API_BASE: "http://host.docker.internal:8084/v1"
-      OPENAI_API_KEY: "ctx_xxxxxxxx_..."`}
+      OPENAI_API_KEY: "<your 40-character key>"`}
                 </pre>
                 <button 
                   onClick={() => copyToClipboard(`extra_hosts:\n  - "host.docker.internal:host-gateway"`)}
@@ -668,7 +675,7 @@ export default function ApiKeys() {
 
 client = OpenAI(
     base_url="http://${hostIP}:8084/v1",
-    api_key="ctx_xxxxxxxx_..."  # Your key
+    api_key="YOUR_API_KEY"  # 40 characters, shown once at creation
 )
 
 response = client.chat.completions.create(
@@ -698,7 +705,7 @@ response = client.chat.completions.create(
 
 const client = new OpenAI({
   baseURL: "http://${hostIP}:8084/v1",
-  apiKey: "ctx_xxxxxxxx_...",  // Your key
+  apiKey: "YOUR_API_KEY",  // 40 characters, shown once at creation
 });
 
 const response = await client.chat.completions
@@ -726,7 +733,7 @@ const response = await client.chat.completions
             <div className="relative">
               <pre className="text-[10px] bg-black/40 rounded-xl p-3 overflow-x-auto border border-white/5 text-white/60 font-mono leading-relaxed">
 {`curl http://${hostIP}:8084/v1/chat/completions \\
-  -H "Authorization: Bearer ctx_xxxxxxxx_..." \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"model": "your-model", "messages": [{"role": "user", "content": "Hi"}]}'`}
               </pre>
@@ -751,31 +758,31 @@ const response = await client.chat.completions
             <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">✓ Recommended</div>
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Use <strong>least-privilege scopes</strong>—only grant what's needed</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Set <strong>IP allowlists</strong> for production applications</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span><strong>Assign keys to users</strong> for accountability and tracking</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Set <strong>expiration dates</strong> for temporary/contractor access</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span><strong>Review usage regularly</strong> for anomalies or inactive keys</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Store keys in <strong>environment variables</strong>, not in code</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Use <strong>separate keys</strong> per application/environment</span>
               </li>
             </ul>
@@ -785,27 +792,27 @@ const response = await client.chat.completions
             <div className="text-[10px] uppercase font-bold text-red-300 tracking-wider">✗ Avoid</div>
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't share a single key across multiple applications</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't commit API keys to Git repositories</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't expose keys in client-side JavaScript (browsers)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't leave unused keys active indefinitely</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't use the same key for dev/staging/production</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400 mt-0.5">✗</span>
+                <span className="text-red-400 mt-0.5" aria-hidden="true">✗</span>
                 <span>Don't skip IP restrictions for production services</span>
               </li>
             </ul>
@@ -819,23 +826,23 @@ const response = await client.chat.completions
         <div className="space-y-3">
           <TroubleshootItem 
             issue='401 Unauthorized — "Missing bearer token"'
-            solution="Ensure your request includes the Authorization header with 'Bearer ' prefix. Example: Authorization: Bearer ctx_xxxxxxxx_..."
+            solution="Ensure the Authorization header is present and starts with 'Bearer '. Related 401 messages: 'Authorization header must be Bearer <key>' (malformed header), 'Invalid API key format' (shorter than 12 characters) and 'API key expired'."
           />
           <TroubleshootItem 
             issue='401 Unauthorized — "Invalid API key"'
             solution="Verify the key prefix exists in the API Keys table and hasn't been revoked. Check for typos in the token. Remember: you can only see the full key once at creation."
           />
           <TroubleshootItem 
-            issue='403 Forbidden — "IP not allowed"'
-            solution="Your client IP is not in the key's allowlist. Check the allowlist configuration or remove IP restrictions if intentional. Verify reverse proxy is forwarding real client IPs."
+            issue='403 Forbidden — "IP <client-ip> not allowed. Allowed IPs: …"'
+            solution="Your client IP is not in the key's allowlist. Check the allowlist or remove IP restrictions if intentional. Behind a reverse proxy, add the proxy to TRUSTED_PROXY_IPS so the forwarded client IP is used."
           />
           <TroubleshootItem 
-            issue='403 Forbidden — "Scope not permitted"'
+            issue='403 Forbidden — "insufficient_scope"'
             solution="The key doesn't have the required scope for this endpoint. Chat endpoint needs 'chat' scope, embeddings needs 'embeddings' scope, etc. Create a new key with appropriate scopes."
           />
           <TroubleshootItem 
             issue="Key usage not appearing in analytics"
-            solution="Usage records are written asynchronously. Wait a few seconds and refresh the Usage page. If the database is unreachable, usage logging fails silently."
+            solution="Usage is recorded when the response—or the stream—finishes, so a long streamed answer shows up only after it ends. Refresh the Usage page or turn on Live. Records are queryable for 30 days. If the database is unreachable the request still succeeds but is not logged."
           />
           <TroubleshootItem 
             issue="Key expired but user still needs access"
@@ -867,9 +874,9 @@ const response = await client.chat.completions
           <div>
             <div className="text-white/80 font-semibold mb-1">Key Token Format</div>
             <div className="text-white/60 text-[10px]">
-              Prefix: <code className="text-cyan-300">ctx_</code><br/>
-              Identifier: 8 chars (visible)<br/>
-              Secret: 32+ chars (hidden)
+              40 random letters and digits<br/>
+              Prefix: first 8 chars (shown in the table)<br/>
+              No <code className="text-cyan-300">ctx_</code> prefix; shown once at creation
             </div>
           </div>
           <div>
@@ -883,9 +890,7 @@ const response = await client.chat.completions
         </div>
       </Card>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex API Key Management Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex API Key Management Guide" />
     </section>
   );
 }
@@ -894,7 +899,7 @@ const response = await client.chat.completions
 function KeyComponent({ icon, label, desc }: { icon: string; label: string; desc: string }) {
   return (
     <div className="flex items-center gap-2 p-2 bg-white/5 rounded-lg border border-white/5">
-      <span className="text-lg">{icon}</span>
+      <span className="text-lg" aria-hidden="true">{icon}</span>
       <div>
         <div className="text-[10px] font-bold text-white">{label}</div>
         <div className="text-[9px] text-white/50">{desc}</div>
@@ -919,7 +924,7 @@ function FlowStep({ num, label, color }: { num: number; label: string; color: st
 }
 
 function Arrow() {
-  return <span className="text-white/30">→</span>;
+  return <span className="text-white/30" aria-hidden="true">→</span>;
 }
 
 function StepItem({ num, children }: { num: number; children: React.ReactNode }) {
@@ -962,7 +967,7 @@ function ScopeRecommendation({ useCase, scopes, note }: { useCase: string; scope
 function AssignmentOption({ type, description, icon }: { type: string; description: string; icon: string }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-lg">{icon}</span>
+      <span className="text-lg" aria-hidden="true">{icon}</span>
       <div>
         <div className="text-[10px] font-bold text-white">{type}</div>
         <div className="text-[10px] text-white/50 leading-relaxed">{description}</div>

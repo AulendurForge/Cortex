@@ -4,6 +4,7 @@ import logging
 import os
 import json
 import re
+import asyncio
 import time
 
 import httpx
@@ -102,6 +103,25 @@ async def system_summary(_: dict = Depends(require_admin)):
     )
 
 
+async def prom_query(base: str, expr: str, timeout: float = 5.0) -> float | None:
+    """Instant Prometheus query returning the first sample as float, or None when there is no
+    sample / the value is NaN / Prometheus is unreachable. Runs off the event loop."""
+    import math
+
+    def _do() -> float | None:
+        try:
+            resp = httpx.get(f"{base.rstrip('/')}/api/v1/query", params={"query": expr}, timeout=timeout)
+            res = resp.json().get("data", {}).get("result", [])
+            if not res:
+                return None
+            val = float(res[0].get("value", [None, "nan"])[1])
+            return None if math.isnan(val) else val
+        except Exception:
+            return None
+
+    return await asyncio.to_thread(_do)
+
+
 @router.get("/system/throughput", response_model=ThroughputSummary)
 async def system_throughput(settings = Depends(get_settings), _: dict = Depends(require_admin)):
     """Summarize current throughput/latency via Prometheus API (best‑effort) with short TTL cache."""
@@ -119,36 +139,27 @@ async def system_throughput(settings = Depends(get_settings), _: dict = Depends(
     base = settings.PROMETHEUS_URL.rstrip("/")
     rate_win = "1m"
     q_win = "5m"
+    # Only inference routes: the admin UI's own polling of /admin/* and /metrics must not count as traffic
+    inf = 'route=~"/v1/(chat/completions|completions|embeddings)"'
+    req_per_sec = await prom_query(base, f"sum(rate(gateway_requests_total{{{inf}}}[{rate_win}]))") or 0.0
+    pts = await prom_query(base, f"sum(rate(vllm:prompt_tokens_total[{rate_win}]) or vector(0)) + sum(rate(llamacpp:prompt_tokens_total[{rate_win}]) or vector(0))") or 0.0
+    gts = await prom_query(base, f"sum(rate(vllm:generation_tokens_total[{rate_win}]) or vector(0)) + sum(rate(llamacpp:tokens_predicted_total[{rate_win}]) or vector(0))") or 0.0
+    lat_p50 = await prom_query(base, f"histogram_quantile(0.5, sum by (le) (rate(gateway_request_latency_seconds_bucket{{{inf}}}[{q_win}])))")
+    lat_p95 = await prom_query(base, f"histogram_quantile(0.95, sum by (le) (rate(gateway_request_latency_seconds_bucket{{{inf}}}[{q_win}])))")
+    ttft_p50 = await prom_query(base, f"histogram_quantile(0.5, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[{q_win}])))")
+    ttft_p95 = await prom_query(base, f"histogram_quantile(0.95, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[{q_win}])))")
 
-    def _q(expr: str) -> float:
-        try:
-            url = f"{base}/api/v1/query"
-            resp = httpx.get(url, params={"query": expr}, timeout=5.0)
-            data = resp.json()
-            v = data.get("data", {}).get("result", [])
-            if not v:
-                return 0.0
-            val = v[0].get("value", [None, "0"])[1]
-            return float(val)
-        except Exception:
-            return 0.0
-
-    req_per_sec = _q(f"sum(rate(gateway_requests_total[{rate_win}]))")
-    pts = _q(f"sum(rate(vllm:prompt_tokens_total[{rate_win}]))")
-    gts = _q(f"sum(rate(vllm:generation_tokens_total[{rate_win}]))")
-    lat_p50 = _q(f"histogram_quantile(0.5, sum by (le) (rate(gateway_request_latency_seconds_bucket[{q_win}])))") * 1000.0
-    lat_p95 = _q(f"histogram_quantile(0.95, sum by (le) (rate(gateway_request_latency_seconds_bucket[{q_win}])))") * 1000.0
-    ttft_p50 = _q(f"histogram_quantile(0.5, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[{q_win}])))") * 1000.0
-    ttft_p95 = _q(f"histogram_quantile(0.95, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[{q_win}])))") * 1000.0
+    def ms(v):
+        return None if v is None else v * 1000.0
 
     out = ThroughputSummary(
         req_per_sec=req_per_sec,
         prompt_tokens_per_sec=pts,
         generation_tokens_per_sec=gts,
-        latency_p50_ms=lat_p50,
-        latency_p95_ms=lat_p95,
-        ttft_p50_ms=ttft_p50,
-        ttft_p95_ms=ttft_p95,
+        latency_p50_ms=ms(lat_p50),
+        latency_p95_ms=ms(lat_p95),
+        ttft_p50_ms=ms(ttft_p50),
+        ttft_p95_ms=ms(ttft_p95),
     )
     _throughput_cache = (now, out)  # type: ignore
     return out
@@ -168,12 +179,12 @@ async def collect_gpu_metrics() -> list[GpuMetrics]:
     """
     settings = get_settings()
     url = f"{settings.PROMETHEUS_URL}/api/v1/query"
+    # DCGM exposes used/free framebuffer (MiB) and the GPU name as the ``modelName`` label
     queries = {
         "util": 'DCGM_FI_DEV_GPU_UTIL',
         "mem_used": 'DCGM_FI_DEV_FB_USED',
-        "mem_total": 'DCGM_FI_DEV_FB_TOTAL',
+        "mem_free": 'DCGM_FI_DEV_FB_FREE',
         "temp": 'DCGM_FI_DEV_GPU_TEMP',
-        "name": 'DCGM_FI_DEV_NAME',
     }
     # Short TTL cache
     now = time.monotonic()
@@ -198,25 +209,27 @@ async def collect_gpu_metrics() -> list[GpuMetrics]:
                         continue
                     entry = results.setdefault(str(idx), {})
                     val = r.get("value", [None, None])[1]
-                    if key == "name":
-                        entry[key] = str(val)
-                    else:
-                        try:
-                            entry[key] = float(val)
-                        except Exception:
-                            pass
+                    model_name = r.get("metric", {}).get("modelName")
+                    if model_name and "name" not in entry:
+                        entry["name"] = str(model_name)
+                    try:
+                        entry[key] = float(val)
+                    except Exception:
+                        pass
             except Exception:
                 # In dev, Prom may be unavailable; return what we can
                 pass
     out: list[GpuMetrics] = []
     for k, v in sorted(results.items(), key=lambda kv: int(kv[0])):
+        used = float(v["mem_used"]) if v.get("mem_used") is not None else None
+        free = float(v["mem_free"]) if v.get("mem_free") is not None else None
         out.append(
             GpuMetrics(
                 index=int(k),
                 name=str(v.get("name")) if v.get("name") is not None else None,
                 utilization_pct=float(v.get("util")) if v.get("util") is not None else None,
-                mem_used_mb=float(v.get("mem_used")) if v.get("mem_used") is not None else None,
-                mem_total_mb=float(v.get("mem_total")) if v.get("mem_total") is not None else None,
+                mem_used_mb=used,
+                mem_total_mb=(used + free) if (used is not None and free is not None) else None,
                 temperature_c=float(v.get("temp")) if v.get("temp") is not None else None,
             )
         )
@@ -436,24 +449,17 @@ async def upstreams_health():
                     meta[url]["category"] = cat
         except Exception:
             pass
+        # Engines are scraped through the gateway (see /prometheus/sd), so select by served model
+        # name rather than by upstream instance; sum vLLM and llama.cpp families.
         for url in list(meta.keys()):
-            import urllib.parse as _up
-            try:
-                inst = _up.urlparse(url).netloc
-                def _q(expr: str) -> float:
-                    try:
-                        r = httpx.get(f"{base}/api/v1/query", params={"query": expr}, timeout=4.0)
-                        data = r.json(); vals = data.get("data", {}).get("result", [])
-                        if not vals:
-                            return 0.0
-                        return float(vals[0].get("value", [None, "0"]) [1])
-                    except Exception:
-                        return 0.0
-                pts = _q(f'sum(rate(vllm:prompt_tokens_total{{instance="{inst}"}}[1m]))')
-                gts = _q(f'sum(rate(vllm:generation_tokens_total{{instance="{inst}"}}[1m]))')
-                meta[url]["tokens_per_sec"] = {"prompt": pts, "generation": gts}
-            except Exception:
-                pass
+            names = [n for n in (url_to_names.get(url) or meta.get(url, {}).get("served_names") or []) if n]
+            if not names:
+                meta[url]["tokens_per_sec"] = None
+                continue
+            sel = 'served_model_name=~"' + "|".join(re.escape(n) for n in names) + '"'
+            pts = await prom_query(base, f'sum(rate(vllm:prompt_tokens_total{{{sel}}}[1m]) or vector(0)) + sum(rate(llamacpp:prompt_tokens_total{{{sel}}}[1m]) or vector(0))')
+            gts = await prom_query(base, f'sum(rate(vllm:generation_tokens_total{{{sel}}}[1m]) or vector(0)) + sum(rate(llamacpp:tokens_predicted_total{{{sel}}}[1m]) or vector(0))')
+            meta[url]["tokens_per_sec"] = {"prompt": pts, "generation": gts} if (pts is not None or gts is not None) else None
         # Best-effort model list via /v1/models (requires internal key if enforced)
         try:
             for url in list(meta.keys()):
@@ -578,67 +584,49 @@ async def list_usage(
 
 
 @router.get("/usage/aggregate", response_model=list[UsageAggItem])
-async def usage_aggregate(hours: int = 24, model: Optional[str] = None):
-    """Get aggregated usage statistics by model."""
+async def usage_aggregate(hours: int = 24, model: Optional[str] = None, task: Optional[str] = None, key_id: Optional[int] = None,
+                          user_id: Optional[int] = None, org_id: Optional[int] = None, status: Optional[str] = None):
+    """Aggregated usage per model; accepts the same filters as /usage."""
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")
     async with SessionLocal() as session:
-        return await get_usage_aggregate(session, hours, model)
+        return await get_usage_aggregate(session, hours, model, task=task, key_id=key_id, user_id=user_id, org_id=org_id, status=status)
 
 
 @router.get("/usage/series", response_model=list[UsageSeriesItem])
-async def usage_series(hours: int = 24, bucket: str = "hour", model: Optional[str] = None):
-    """Get time-series usage data."""
-    if bucket not in ("hour", "minute"):
+async def usage_series(hours: int = 24, bucket: str = "hour", model: Optional[str] = None, task: Optional[str] = None,
+                       key_id: Optional[int] = None, user_id: Optional[int] = None, org_id: Optional[int] = None, status: Optional[str] = None):
+    """Requests/tokens per bucket (minute | hour | day), zero-filled; same filters as /usage."""
+    if bucket not in ("minute", "hour", "day"):
         raise HTTPException(status_code=400, detail="invalid_bucket")
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")
     async with SessionLocal() as session:
-        return await get_usage_series(session, hours, bucket, model)
+        return await get_usage_series(session, hours, bucket, model, task=task, key_id=key_id, user_id=user_id, org_id=org_id, status=status)
 
 
 @router.get("/usage/latency", response_model=LatencySummary)
-async def usage_latency(hours: int = 24, model: Optional[str] = None):
-    """Calculate latency percentiles."""
+async def usage_latency(hours: int = 24, model: Optional[str] = None, task: Optional[str] = None, key_id: Optional[int] = None,
+                        user_id: Optional[int] = None, org_id: Optional[int] = None, status: Optional[str] = None):
+    """Latency percentiles over successful requests; same filters as /usage."""
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")
     async with SessionLocal() as session:
-        return await get_usage_latency(session, hours, model)
+        return await get_usage_latency(session, hours, model, task=task, key_id=key_id, user_id=user_id, org_id=org_id, status=status)
 
 
 @router.get("/usage/ttft", response_model=TtftSummary)
-async def usage_ttft():
-    # Approximate quantiles from Prometheus histogram if available
-    try:
-        from ..metrics import STREAM_TTFT_SECONDS
-        # prometheus_client Histogram buckets are stored internally; not a public API, so best-effort
-        histogram = STREAM_TTFT_SECONDS
-        sample = getattr(histogram, '_sum', None)
-        buckets = getattr(histogram, '_buckets', None)
-        counts = getattr(histogram, '_count', None)
-        if not buckets or not isinstance(buckets, dict):
-            return TtftSummary(p50_s=0.0, p95_s=0.0)
-        total = sum(buckets.values())
-        if total <= 0:
-            return TtftSummary(p50_s=0.0, p95_s=0.0)
-        items = sorted(((float(k), int(v)) for k, v in buckets.items()), key=lambda x: x[0])
-        cum = 0
-        p50 = 0.0
-        p95 = 0.0
-        for bound, cnt in items:
-            cum += cnt
-            q = cum / total
-            if p50 == 0.0 and q >= 0.5:
-                p50 = bound
-            if p95 == 0.0 and q >= 0.95:
-                p95 = bound
-                break
-        return TtftSummary(p50_s=p50, p95_s=p95)
-    except Exception:
-        return TtftSummary(p50_s=0.0, p95_s=0.0)
+async def usage_ttft(settings = Depends(get_settings)):
+    """Time-to-first-token quantiles of streamed responses over the last 5 minutes, from Prometheus.
+    Null when there are no streamed requests in the window (or Prometheus is unreachable)."""
+    base = settings.PROMETHEUS_URL
+    p50 = await prom_query(base, "histogram_quantile(0.5, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[5m])))")
+    p95 = await prom_query(base, "histogram_quantile(0.95, sum by (le) (rate(gateway_stream_ttft_seconds_bucket[5m])))")
+    n = await prom_query(base, "sum(increase(gateway_stream_ttft_seconds_count[5m]))")
+    return TtftSummary(p50_s=p50, p95_s=p95, samples=int(n or 0))
 
 
 @router.get("/usage/export")
@@ -656,70 +644,31 @@ async def usage_export(
         raise HTTPException(status_code=503, detail="Database not ready")
     async with SessionLocal() as session:
         from ..models import Usage
-        q = select(Usage)
-        if hours is not None:
-            from datetime import datetime, timedelta
-            since = datetime.utcnow() - timedelta(hours=max(1, min(int(hours), 24 * 30)))
-            q = q.where(Usage.created_at >= since)
-        if model:
-            q = q.where(Usage.model_name == model)
-        if task:
-            q = q.where(Usage.task == task)
-        if key_id is not None:
-            q = q.where(Usage.key_id == key_id)
-        if user_id is not None:
-            q = q.where(Usage.user_id == user_id)
-        if org_id is not None:
-            q = q.where(Usage.org_id == org_id)
-        if status:
-            if status.endswith('xx') and len(status) == 3 and status[0].isdigit():
-                base = int(status[0]) * 100
-                q = q.where(Usage.status_code >= base, Usage.status_code < base + 100)
-            else:
-                try:
-                    code = int(status)
-                    q = q.where(Usage.status_code == code)
-                except Exception:
-                    pass
+        from ..services.usage_analytics import apply_filters
+        q = apply_filters(select(Usage), Usage, hours=hours, model=model, task=task, key_id=key_id, user_id=user_id, org_id=org_id, status=status)
         q = q.order_by(Usage.id.desc()).limit(50000)
         rows = (await session.execute(q)).scalars().all()
-        # Build CSV
         import io, csv
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["id", "created_at", "key_id", "model", "task", "prompt_tokens", "completion_tokens", "total_tokens", "latency_ms", "status_code", "req_id"])
+        writer.writerow(["id", "created_at", "key_id", "user_id", "org_id", "model", "task", "prompt_tokens", "completion_tokens", "total_tokens", "latency_ms", "status_code", "req_id"])
         for r in rows:
             ts = r.created_at.timestamp() if hasattr(r.created_at, 'timestamp') else 0.0
-            writer.writerow([r.id, ts, r.key_id, r.model_name, r.task, r.prompt_tokens, r.completion_tokens, r.total_tokens, r.latency_ms, r.status_code, r.req_id])
+            writer.writerow([r.id, ts, r.key_id, r.user_id, r.org_id, r.model_name, r.task, r.prompt_tokens, r.completion_tokens, r.total_tokens, r.latency_ms, r.status_code, r.req_id])
         return Response(content=buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=usage_export.csv"})
 
 
 @router.post("/upstreams/refresh-health")
 async def refresh_upstreams_health(body: HealthRefreshRequest | None = None, settings = Depends(get_settings)):
-    # On-demand active health checks for configured URLs
+    """Probe every upstream now (static pools, managed models and any extra URLs), update the
+    shared health state and return the probe results plus the refreshed snapshot."""
+    from ..health import probe_upstream, all_upstream_urls
     http_client = _get_http_client()
     if http_client is None:
         raise HTTPException(status_code=503, detail="HTTP client not ready")
-    gen_urls = settings.gen_urls()
-    emb_urls = settings.emb_urls()
-    targets = sorted(set((body.urls or []) + gen_urls + emb_urls))
-    results = []
-    for u in targets:
-        status = "down"
-        try:
-            t0 = time.time()
-            # Align with httpx 0.27 timeout requirements
-            resp = await http_client.get(
-                f"{u}{settings.HEALTH_CHECK_PATH}",
-                timeout=httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=5.0),
-            )
-            status = "up" if 200 <= resp.status_code < 500 else f"err:{resp.status_code}"
-            elapsed = time.time() - t0
-        except Exception as e:
-            elapsed = None
-            status = "error"
-        results.append({"url": u, "status": status, "elapsed_sec": elapsed})
-    return {"results": results}
+    targets = sorted(set(((body.urls if body else None) or []) + all_upstream_urls(settings)))
+    results = [await probe_upstream(http_client, u, settings) for u in targets]
+    return {"results": results, "snapshot": await upstreams_health()}
 
 
 # ---------------------------
@@ -768,13 +717,14 @@ async def list_docker_images(_: dict = Depends(require_admin)):
     cli = docker.from_env()
     infrastructure = []
     
-    infra_images = [
-        ("python:3.11-slim", "Backend runtime"),
-        ("node:18-alpine", "Frontend runtime"),
-        ("postgres:16", "Database"),
-        ("redis:7", "Cache/rate limiting"),
-        ("prom/prometheus:v2.47.0", "Metrics collection"),
-    ]
+    # pinned in versions.env and passed by compose as CORTEX_INFRA_IMAGES
+    purposes = {"postgres": "Database", "redis": "Cache/rate limiting", "prometheus": "Metrics collection",
+                "node-exporter": "Host metrics", "dcgm": "GPU metrics", "cadvisor": "Container metrics"}
+    infra_images = []
+    for ref in (settings.CORTEX_INFRA_IMAGES or "").split(","):
+        ref = ref.strip()
+        if ref:
+            infra_images.append((ref, next((p for k, p in purposes.items() if k in ref), "Infrastructure")))
     
     for img_name, purpose in infra_images:
         try:
@@ -860,81 +810,59 @@ def _get_offline_recommendations(vllm_cached: bool, llamacpp_cached: bool, infra
 # Per-model vLLM Metrics (Gap #16)
 # ---------------------------
 
-async def _scrape_vllm_metrics(container_name: str) -> dict:
-    """Scrape Prometheus metrics from a vLLM container.
-    
-    vLLM exposes metrics on /metrics endpoint in Prometheus format.
-    
-    Args:
-        container_name: Docker container name
-        
-    Returns:
-        Dict with parsed metric values
-    """
-    metrics = {}
-    try:
-        client = _get_http_client()
-        if not client:
-            return metrics
-        
-        # vLLM containers expose metrics on port 8000
-        resp = await client.get(f"http://{container_name}:8000/metrics", timeout=5.0)
-        if resp.status_code != 200:
-            return metrics
-        
-        text = resp.text
-        
-        # Parse Prometheus format metrics
-        
-        # Parse gauge metrics (single values)
-        gauge_patterns = {
-            'num_requests_running': r'vllm:num_requests_running\{[^}]*\}\s+([\d.]+)',
-            'num_requests_waiting': r'vllm:num_requests_waiting\{[^}]*\}\s+([\d.]+)',
-            'num_requests_swapped': r'vllm:num_requests_swapped\{[^}]*\}\s+([\d.]+)',
-            'gpu_cache_usage_pct': r'vllm:gpu_cache_usage_perc\{[^}]*\}\s+([\d.]+)',
-            'cpu_cache_usage_pct': r'vllm:cpu_cache_usage_perc\{[^}]*\}\s+([\d.]+)',
-        }
-        
-        for key, pattern in gauge_patterns.items():
-            match = re.search(pattern, text)
-            if match:
-                metrics[key] = float(match.group(1))
-        
-        # Parse counter metrics (cumulative totals)
-        counter_patterns = {
-            'prompt_tokens_total': r'vllm:prompt_tokens_total\{[^}]*\}\s+([\d.]+)',
-            'generation_tokens_total': r'vllm:generation_tokens_total\{[^}]*\}\s+([\d.]+)',
-        }
-        
-        for key, pattern in counter_patterns.items():
-            match = re.search(pattern, text)
-            if match:
-                metrics[key] = float(match.group(1))
-        
-        # Parse histogram metrics for TTFT (time to first token)
-        # Look for p50 and p95 quantiles
-        ttft_sum_match = re.search(r'vllm:time_to_first_token_seconds_sum\{[^}]*\}\s+([\d.]+)', text)
-        ttft_count_match = re.search(r'vllm:time_to_first_token_seconds_count\{[^}]*\}\s+([\d.]+)', text)
-        if ttft_sum_match and ttft_count_match:
-            ttft_sum = float(ttft_sum_match.group(1))
-            ttft_count = float(ttft_count_match.group(1))
-            if ttft_count > 0:
-                # Approximate average TTFT (not exact p50, but useful)
-                metrics['time_to_first_token_p50_ms'] = (ttft_sum / ttft_count) * 1000
-        
-        # Parse request latency histogram
-        latency_sum_match = re.search(r'vllm:e2e_request_latency_seconds_sum\{[^}]*\}\s+([\d.]+)', text)
-        latency_count_match = re.search(r'vllm:e2e_request_latency_seconds_count\{[^}]*\}\s+([\d.]+)', text)
-        if latency_sum_match and latency_count_match:
-            lat_sum = float(latency_sum_match.group(1))
-            lat_count = float(latency_count_match.group(1))
-            if lat_count > 0:
-                metrics['request_latency_p50_ms'] = (lat_sum / lat_count) * 1000
-        
-    except Exception as e:
-        logger.debug(f"Failed to scrape metrics from {container_name}: {e}")
-    
-    return metrics
+def _num(text: str, pattern: str) -> float | None:
+    m = re.search(pattern, text, re.M)
+    return float(m.group(1)) if m else None
+
+
+def parse_engine_metrics(text: str) -> dict:
+    """Parse the Prometheus exposition of a vLLM or llama.cpp server into the ModelMetrics fields."""
+    out: dict = {}
+    if "vllm:" in text:
+        out["engine_metrics"] = "vllm"
+        out["num_requests_running"] = _num(text, r'^vllm:num_requests_running(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["num_requests_waiting"] = _num(text, r'^vllm:num_requests_waiting(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["num_requests_swapped"] = _num(text, r'^vllm:num_requests_swapped(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["gpu_cache_usage_pct"] = _num(text, r'^vllm:gpu_cache_usage_perc(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["cpu_cache_usage_pct"] = _num(text, r'^vllm:cpu_cache_usage_perc(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["prompt_tokens_total"] = _num(text, r'^vllm:prompt_tokens_total(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["generation_tokens_total"] = _num(text, r'^vllm:generation_tokens_total(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        s, c = _num(text, r'^vllm:time_to_first_token_seconds_sum(?:\{[^}]*\})?\s+([\d.eE+-]+)'), _num(text, r'^vllm:time_to_first_token_seconds_count(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        if s is not None and c:
+            out["time_to_first_token_avg_ms"] = s / c * 1000
+        s, c = _num(text, r'^vllm:e2e_request_latency_seconds_sum(?:\{[^}]*\})?\s+([\d.eE+-]+)'), _num(text, r'^vllm:e2e_request_latency_seconds_count(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        if s is not None and c:
+            out["request_latency_avg_ms"] = s / c * 1000
+    elif "llamacpp:" in text:
+        out["engine_metrics"] = "llamacpp"
+        out["num_requests_running"] = _num(text, r'^llamacpp:requests_processing(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["num_requests_waiting"] = _num(text, r'^llamacpp:requests_deferred(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["prompt_tokens_total"] = _num(text, r'^llamacpp:prompt_tokens_total(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["generation_tokens_total"] = _num(text, r'^llamacpp:tokens_predicted_total(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        pts = _num(text, r'^llamacpp:prompt_tokens_seconds(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        gts = _num(text, r'^llamacpp:predicted_tokens_seconds(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["prompt_tokens_per_sec"] = pts
+        out["generation_tokens_per_sec"] = gts
+        kv = _num(text, r'^llamacpp:kv_cache_usage_ratio(?:\{[^}]*\})?\s+([\d.eE+-]+)')
+        out["gpu_cache_usage_pct"] = kv * 100 if kv is not None else None
+    return out
+
+
+async def _scrape_model_metrics(m) -> dict:
+    """Fetch and parse /metrics of a managed model through the supervisor's URL with the internal key."""
+    from ..services.model_supervisor import supervisor
+    client = _get_http_client()
+    if not client:
+        raise RuntimeError("http client not ready")
+    url = await supervisor.model_url(m)
+    headers = {}
+    key = get_settings().INTERNAL_VLLM_API_KEY
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    resp = await client.get(f"{url}/metrics", headers=headers, timeout=5.0)
+    if resp.status_code != 200:
+        raise RuntimeError(f"engine returned HTTP {resp.status_code} for /metrics")
+    return parse_engine_metrics(resp.text)
 
 
 @router.get("/models/metrics", response_model=list[ModelMetrics])
@@ -954,36 +882,27 @@ async def get_model_metrics(_: dict = Depends(require_admin)):
     
     async with SessionLocal() as session:
         res = await session.execute(
-            select(Model).where(Model.state.in_(['running', 'loading']))
+            select(Model).where(Model.state.in_(['starting', 'loading', 'running', 'failed']), Model.archived == False)  # noqa: E712
         )
         models = res.scalars().all()
-        
+
         for m in models:
             entry = ModelMetrics(
                 model_id=m.id,
                 model_name=m.name,
                 served_name=m.served_model_name or m.name,
+                engine_type=m.engine_type or "vllm",
                 status=m.state or "unknown",
+                state_reason=getattr(m, "state_reason", None),
             )
-            
-            # Only scrape metrics for running vLLM models
-            if m.state == 'running' and m.container_name and m.engine_type == 'vllm':
+            if m.state == 'running':
                 try:
-                    metrics = await _scrape_vllm_metrics(m.container_name)
-                    entry.num_requests_running = metrics.get('num_requests_running')
-                    entry.num_requests_waiting = metrics.get('num_requests_waiting')
-                    entry.num_requests_swapped = metrics.get('num_requests_swapped')
-                    entry.prompt_tokens_total = metrics.get('prompt_tokens_total')
-                    entry.generation_tokens_total = metrics.get('generation_tokens_total')
-                    entry.time_to_first_token_p50_ms = metrics.get('time_to_first_token_p50_ms')
-                    entry.request_latency_p50_ms = metrics.get('request_latency_p50_ms')
-                    entry.gpu_cache_usage_pct = metrics.get('gpu_cache_usage_pct')
-                    entry.cpu_cache_usage_pct = metrics.get('cpu_cache_usage_pct')
+                    metrics = await _scrape_model_metrics(m)
+                    for k, v in metrics.items():
+                        if hasattr(entry, k):
+                            setattr(entry, k, v)
                 except Exception as e:
-                    entry.error = str(e)
-            elif m.state == 'loading':
-                entry.status = 'loading'
-            
+                    entry.error = f"metrics unavailable: {e}"
             results.append(entry)
-    
+
     return results

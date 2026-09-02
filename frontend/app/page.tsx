@@ -1,23 +1,15 @@
-"use client";
+'use client';
 
 import { useEffect } from 'react';
-import { getGatewayBaseUrl } from '../src/lib/api-clients';
+import { useRouter } from 'next/navigation';
+import { useUser } from '@/providers/UserProvider';
 
 export default function Home() {
+  const router = useRouter();
+  const { status } = useUser();
   useEffect(() => {
-    let cancelled = false;
-    const base = getGatewayBaseUrl();
-    (async () => {
-      try {
-        const r = await fetch(base + '/auth/me', { credentials: 'include', cache: 'no-store' });
-        if (!cancelled) window.location.href = r.ok ? '/guide' : '/login';
-      } catch {
-        if (!cancelled) window.location.href = '/login';
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  return (
-    <main className="p-6 text-white/70 text-sm">Loading…</main>
-  );
+    if (status === 'authenticated') router.replace('/guide');
+    else if (status === 'anonymous') router.replace('/login');
+  }, [status, router]);
+  return <main className="p-6 text-white/70 text-sm" role="status">Loading…</main>;
 }

@@ -14,6 +14,7 @@ If your gateway runs on a different port, change `NEXT_PUBLIC_GATEWAY_URL` accor
 
 # Cortex Admin UI (Next.js)
 
-This folder will contain the admin UI scaffold. Planned stack: Next.js 14 + TS, Tailwind, shadcn/ui, React Query, Zod.
+Next.js 14 (app router) admin console. `npm run dev` for hot reload, `npm run typecheck`, `npm run lint`, `npm test` (vitest).
+Runtime gateway address: `/runtime-config.js` (env `CORTEX_GATEWAY_URL`), see `src/lib/api-clients.ts`.
 
 See `plans/frontendPlan.md` for milestones and file structure.

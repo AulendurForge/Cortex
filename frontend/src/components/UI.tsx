@@ -8,10 +8,15 @@ export function Button({
   className = '', 
   variant = 'default',
   size = 'default',
+  type = 'button',
+  loading = false,
+  disabled,
   ...props 
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { 
   variant?: 'default' | 'primary' | 'cyan' | 'purple' | 'danger';
   size?: 'default' | 'sm';
+  /** Shows a busy state and disables the button while an action is pending. */
+  loading?: boolean;
 }) {
   const variants = {
     default: 'btn',
@@ -26,11 +31,16 @@ export function Button({
     sm: 'btn-sm',
   };
 
+  // Buttons default to type="button": a Cancel button inside a <form> must never submit it.
   return (
     <button 
-      className={cn(variants[variant], sizes[size], className)} 
+      type={type}
+      className={cn(variants[variant], sizes[size], loading && 'opacity-70 cursor-progress', className)} 
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       {...props}
     >
+      {loading && <span className="inline-block w-3 h-3 mr-1.5 rounded-full border-2 border-current border-t-transparent animate-spin align-[-2px]" aria-hidden />}
       {children}
     </button>
   );

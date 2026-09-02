@@ -22,8 +22,7 @@ export type CalculatorResult = {
     kv_cache_dtype: KvDtype | undefined;
     gpu_memory_utilization: number;
     max_model_len: number;
-    max_num_batched_tokens: number;
-    block_size: number;
+    max_num_seqs: number;
     cpu_offload_gb: number;
   }>;
 };
@@ -89,7 +88,9 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
   };
 
   const onApplyClick = () => {
-    const util = recommendGpuMemoryUtilization();
+    // block_size / max_num_batched_tokens are left to the engine defaults: they depend on the
+    // attention backend, not on this estimate.
+    const util = recommendGpuMemoryUtilization(summary);
     onApply({ applied: true, values: {
       engine_type: 'vllm',
       selected_gpus: Array.from({ length: choices.tpSize }, (_, i) => i),
@@ -99,8 +100,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
       kv_cache_dtype: choices.kvCacheDtype || undefined,
       gpu_memory_utilization: util,
       max_model_len: work.seqLen,
-      block_size: 16,
-      max_num_batched_tokens: 2048,
+      max_num_seqs: Math.max(1, work.maxNumSeqs || 1),
       cpu_offload_gb: cpuOffloadGb > 0 ? Math.round(cpuOffloadGb) : 0,
     }});
   };
@@ -293,13 +293,13 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
                     <div key={p.index} className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-[9px] uppercase font-black text-white/40">GPU {p.index}</span>
-                        <Badge className={p.fits ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}>
-                          {p.fits ? 'FITS' : 'OVERFLOW'}
+                        <Badge className={!p.vramKnown ? "bg-white/10 text-white/60 border-white/10" : p.fits ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}>
+                          {!p.vramKnown ? 'CAPACITY UNKNOWN' : p.fits ? 'FITS' : 'OVERFLOW'}
                         </Badge>
                       </div>
                       <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
                         <div className={cn("h-full transition-all duration-1000", p.fits ? "bg-gradient-to-r from-indigo-500 to-purple-500" : "bg-red-500")}
-                             style={{ width: `${Math.min(100, (p.totalBytes / (p.vramFreeBytes ? p.vramFreeBytes + p.totalBytes : 40 * 1024 * 1024 * 1024)) * 100)}%` }} />
+                             style={{ width: `${p.vramKnown && p.vramTotalBytes ? Math.min(100, (p.totalBytes / p.vramTotalBytes) * 100) : 0}%` }} />
                       </div>
                       <div className="flex justify-between text-[9px] font-mono text-white/40">
                         <span>Weights: {bytesToGiB(p.weightsBytes).toFixed(1)}G</span>

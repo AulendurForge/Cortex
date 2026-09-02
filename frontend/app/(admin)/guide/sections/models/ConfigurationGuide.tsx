@@ -1,6 +1,7 @@
 'use client';
 
-import { Card, SectionTitle, InfoBox, Badge } from '../../../../../src/components/UI';
+import { Card, SectionTitle, InfoBox, Badge } from '@/components/UI';
+import { Attribution } from '../Attribution';
 
 export default function ConfigurationGuide() {
   return (
@@ -28,7 +29,7 @@ export default function ConfigurationGuide() {
         <SectionTitle variant="blue" className="text-[10px]">vLLM Configuration (v0.28)</SectionTitle>
 
         <Card className="p-3 bg-blue-500/10 border-blue-500/30 flex items-start gap-3">
-          <span className="text-lg">💡</span>
+          <span className="text-lg" aria-hidden="true">💡</span>
           <div className="flex-1">
             <p className="text-[11px] text-white/80 leading-relaxed">
               <strong className="text-blue-300">Looking for model-specific settings?</strong> The{' '}
@@ -54,10 +55,10 @@ export default function ConfigurationGuide() {
             <ConfigItem name="Tensor / Pipeline parallel size" options={['1 - 64', '1 - 16']} default="1 / 1"
               description="--tensor-parallel-size shards every layer across GPUs; --pipeline-parallel-size splits layers into stages. Both are emitted only when > 1."
               tip="TP for a single node with fast interconnect; PP only when the model does not fit with TP alone." />
-            <ConfigItem name="GPU Memory Utilization (--gpu-memory-utilization)" options={['0.05 - 0.99']} default="0.9 (engine 0.92)"
+            <ConfigItem name="GPU Memory Utilization (--gpu-memory-utilization)" options={['0.05 - 0.99']} default="0.92"
               description="Share of each GPU's VRAM vLLM may reserve for weights plus KV cache."
               tip="'Not enough KV cache memory' errors: raise this, lower context length, or set an explicit KV cache memory (bytes) in the spec section." />
-            <ConfigItem name="Max Context Length (--max-model-len)" options={['512 - 262144', 'empty = model default']} default="model config"
+            <ConfigItem name="Max model length (--max-model-len)" options={['512 - 262144', 'empty = model default']} default="model config"
               description="Upper bound of tokens per request. Empty lets vLLM read max_position_embeddings from the checkpoint."
               tip="KV cache VRAM scales linearly with context. Lower it explicitly on small GPUs." />
             <ConfigItem name="Trust Remote Code (--trust-remote-code)" options={['on', 'off']} default="off"
@@ -67,7 +68,7 @@ export default function ConfigurationGuide() {
 
           <Card className="p-4 bg-orange-500/5 border-orange-500/20 space-y-4">
             <div className="text-[11px] font-bold text-orange-300 uppercase tracking-wider">Memory, Quantization & Attention</div>
-            <ConfigItem name="Attention Backend (--attention-backend)" options={['auto', 'FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION', 'TORCH_SDPA']} default="auto"
+            <ConfigItem name="Attention Backend (--attention-backend)" options={['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION', 'TORCH_SDPA']} default="unset (vLLM picks)"
               description="Force one attention implementation. FLASHINFER helps long contexts and MoE; TORCH_SDPA is the broadest fallback."
               tip="The FA2 badge next to the field tells you whether your primary GPU supports Flash Attention 2 (SM 80+)." />
             <ConfigItem name="Quantization (--quantization)" options={['awq', 'awq_marlin', 'gptq', 'gptq_marlin', 'fp8', 'compressed-tensors', 'modelopt', 'modelopt_fp4', 'mxfp4', 'torchao', 'experts_int8', 'bitsandbytes']} default="none"
@@ -168,8 +169,8 @@ export default function ConfigurationGuide() {
             </p>
             <ConfigItem name="Draft Model (--model-draft)" options={['path relative to the models dir']} default="(empty)"
               description="A smaller GGUF from the same family, e.g. draft/Qwen2.5-0.5B-Q8_0.gguf." tip="4-10x smaller than the main model; Q8_0 keeps drafts accurate." />
-            <ConfigItem name="Speculative Type (--spec-type)" options={['draft-simple', 'draft-eagle3', 'draft-mtp', 'ngram-*']} default="draft-simple when a draft model is set"
-              description="ngram-* types need no draft model." tip="Leave unset unless you know the model supports eagle3/MTP." />
+            <ConfigItem name="Speculative Type (--spec-type)" options={['draft-simple', 'draft-eagle3', 'draft-mtp', 'ngram-*']} default="inferred from the draft model"
+              description="Left unset, llama.cpp infers the type from the draft model's metadata (sharded drafts need an explicit type). ngram-* types need no draft model." tip="Leave unset unless you know the model supports eagle3/MTP." />
             <ConfigItem name="Draft Tokens max / min (--spec-draft-n-max / -n-min)" options={['1 - 64', '0 - 64']} default="3 / engine default"
               description="How many tokens are proposed per step." tip="3-16 typical; more helps predictable text like code." />
             <ConfigItem name="Draft p_min / Draft GPU layers (--spec-draft-p-min / --spec-draft-ngl)" options={['0.0 - 1.0', '0 - 999']} default="engine default"
@@ -193,8 +194,8 @@ export default function ConfigurationGuide() {
         <SectionTitle variant="purple" className="text-[10px]">Request Defaults (Both Engines)</SectionTitle>
         <Card className="p-4 bg-purple-500/5 border-purple-500/20 space-y-4">
           <p className="text-[11px] text-white/70 leading-relaxed mb-3">
-            These parameters set defaults for API requests when clients don&apos;t specify them. They are applied by the gateway per request,
-            never at container start, so changing them does not restart the model. Leave a field empty to use the engine&apos;s default;
+            These parameters set defaults for API requests when clients don&apos;t specify them. They are merged into each request by the gateway
+            and saved with the model; Save &amp; Apply restarts a running model so the new defaults take effect. Leave a field empty to use the engine&apos;s default;
             the suggested values are only placeholders.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -240,7 +241,7 @@ export default function ConfigurationGuide() {
         <SectionTitle variant="cyan" className="text-[10px]">VRAM Estimation Guide</SectionTitle>
         <Card className="p-4 bg-cyan-500/5 border-cyan-500/20 space-y-4">
           <p className="text-[11px] text-white/70 leading-relaxed mb-3">
-            Use the <strong className="text-cyan-300">🧮 Calculator</strong> button in the Models page to estimate
+            Use the <strong className="text-cyan-300">Calculator</strong> button in the Models page to estimate
             VRAM requirements. Here&apos;s a rough guide for common scenarios:
           </p>
           <div className="overflow-x-auto">
@@ -270,9 +271,7 @@ export default function ConfigurationGuide() {
         </Card>
       </section>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Configuration Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Configuration Guide" />
     </section>
   );
 }

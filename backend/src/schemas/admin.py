@@ -17,14 +17,18 @@ class SystemSummary(BaseModel):
 
 
 class ThroughputSummary(BaseModel):
-    """Gateway throughput and latency metrics."""
+    """Inference throughput and latency (Prometheus, last minutes). Only /v1 inference routes count;
+    token rates sum vLLM and llama.cpp engine metrics. Null = no samples in the window."""
     req_per_sec: float
     prompt_tokens_per_sec: float
     generation_tokens_per_sec: float
-    latency_p50_ms: float
-    latency_p95_ms: float
-    ttft_p50_ms: float
-    ttft_p95_ms: float
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    ttft_p50_ms: float | None
+    ttft_p95_ms: float | None
+    scope: str = "inference"
+    units: dict[str, str] = {"req_per_sec": "req/s", "prompt_tokens_per_sec": "tok/s", "generation_tokens_per_sec": "tok/s",
+                             "latency_p50_ms": "ms", "latency_p95_ms": "ms", "ttft_p50_ms": "ms", "ttft_p95_ms": "ms"}
 
 
 class GpuMetrics(BaseModel):
@@ -59,6 +63,10 @@ class UsageItem(BaseModel):
     """Individual usage record."""
     id: int
     key_id: int | None
+    user_id: int | None = None
+    org_id: int | None = None
+    username: str | None = None
+    org_name: str | None = None
     model_name: str
     task: str
     prompt_tokens: int
@@ -87,16 +95,18 @@ class UsageSeriesItem(BaseModel):
 
 
 class LatencySummary(BaseModel):
-    """Latency percentile summary."""
+    """Latency percentile summary over successful requests."""
     p50_ms: float
     p95_ms: float
     avg_ms: float
+    samples: int = 0
 
 
 class TtftSummary(BaseModel):
-    """Time-to-first-token summary."""
-    p50_s: float
-    p95_s: float
+    """Time-to-first-token summary from Prometheus (null when there are no samples)."""
+    p50_s: float | None
+    p95_s: float | None
+    samples: int = 0
 
 
 class HealthRefreshRequest(BaseModel):
@@ -156,10 +166,17 @@ class Capabilities(BaseModel):
 
 
 class ModelMetrics(BaseModel):
-    """Per-model vLLM inference metrics (Gap #16)."""
+    """Per-model engine metrics (vLLM and llama.cpp), scraped through the gateway."""
     model_id: int
     model_name: str
     served_name: str
+    engine_type: str = "vllm"
+    engine_metrics: str | None = None       # which metric family was parsed
+    state_reason: str | None = None
+    prompt_tokens_per_sec: float | None = None      # llama.cpp reports rates directly
+    generation_tokens_per_sec: float | None = None
+    time_to_first_token_avg_ms: float | None = None
+    request_latency_avg_ms: float | None = None
     # Request metrics
     num_requests_running: float | None = None
     num_requests_waiting: float | None = None

@@ -2,30 +2,27 @@
 
 import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiFetch, { ApiError, getGatewayBaseUrl } from '../../../src/lib/api-clients';
-import { DryRunResult, DryRunResultSchema, ModelItem, ModelListSchema, ReadinessSchema, RecipeDetailSchema } from '../../../src/lib/validators';
-import { Card, Button, PageHeader, InfoBox, SectionTitle } from '../../../src/components/UI';
-import { Modal } from '../../../src/components/Modal';
-import { ModelWorkflowForm } from '../../../src/components/models/ModelWorkflowForm';
-import { ModelFormValues, apiItemToFormValues, recipeToFormValues } from '../../../src/components/models/modelFormValues';
-import { LogsViewer } from '../../../src/components/models/LogsViewer';
-import { DiagnosticBanner } from '../../../src/components/models/DiagnosticBanner';
-import { ConfirmDialog } from '../../../src/components/Confirm';
-import { ResourceCalculatorModal } from '../../../src/components/models/ResourceCalculatorModal';
-import { TestResultsModal, TestResult } from '../../../src/components/models/TestResultsModal';
-import { SaveRecipeDialog } from '../../../src/components/models/SaveRecipeDialog';
-import { MyRecipesModal } from '../../../src/components/models/MyRecipesModal';
-import { ArchivedModelsTable, ModelsListError, ModelsTable } from '../../../src/components/models/ModelsTable';
-import { describeStartError } from '../../../src/components/models/startErrors';
-import { useUser } from '../../../src/providers/UserProvider';
-import { useToast } from '../../../src/providers/ToastProvider';
+import apiFetch, { ApiError, getGatewayBaseUrl } from '@/lib/api-clients';
+import { DryRunResult, DryRunResultSchema, ModelItem, ModelListSchema, RecipeDetailSchema } from '@/lib/validators';
+import { Card, Button, PageHeader, InfoBox, SectionTitle } from '@/components/UI';
+import { Modal } from '@/components/Modal';
+import { ModelWorkflowForm } from '@/components/models/ModelWorkflowForm';
+import { ModelFormValues, apiItemToFormValues, recipeToFormValues } from '@/components/models/modelFormValues';
+import { LogsViewer } from '@/components/models/LogsViewer';
+import { DiagnosticBanner } from '@/components/models/DiagnosticBanner';
+import { ConfirmDialog } from '@/components/Confirm';
+import { ResourceCalculatorModal } from '@/components/models/ResourceCalculatorModal';
+import { TestResultsModal, TestResult } from '@/components/models/TestResultsModal';
+import { SaveRecipeDialog } from '@/components/models/SaveRecipeDialog';
+import { MyRecipesModal } from '@/components/models/MyRecipesModal';
+import { ArchivedModelsTable, ModelsListError, ModelsTable } from '@/components/models/ModelsTable';
+import { describeStartError } from '@/components/models/startErrors';
+import { useUser } from '@/providers/UserProvider';
+import { useToast } from '@/providers/ToastProvider';
+import { errMsg } from '@/lib/errors';
 
 type StatusRow = { name?: string; served_model_name?: string; task?: string; state?: string };
 
-function errMsg(e: unknown): string {
-  const a = e as Partial<ApiError> | undefined;
-  return (a && typeof a.message === 'string' && a.message) || String(e);
-}
 
 export default function ModelsPage() {
   // Resolved on the client only: the SSR pass cannot know the browser's hostname (avoids a hydration mismatch)
@@ -51,19 +48,12 @@ export default function ModelsPage() {
 
   const list = useQuery<ModelItem[], ApiError>({
     queryKey: ['models', isAdmin],
+    // wait for the session before choosing the endpoint (avoids a flash of the public status list)
+    enabled: !!user,
     queryFn: async () => {
       if (isAdmin) {
-        const models = ModelListSchema.parse(await apiFetch<unknown>('/admin/models'));
-        const loading = models.filter((m) => m.state === 'loading');
-        if (loading.length === 0) return models;
-        const ready = new Set<number>();
-        await Promise.all(loading.map(async (m) => {
-          try {
-            const r = ReadinessSchema.parse(await apiFetch<unknown>(`/admin/models/${m.id}/readiness`));
-            if (r.status === 'ready') ready.add(m.id);
-          } catch { /* still loading */ }
-        }));
-        return models.map((m) => (ready.has(m.id) ? { ...m, state: 'running' as const } : m));
+        // the supervisor flips loading -> running itself; polling the list is enough
+        return ModelListSchema.parse(await apiFetch<unknown>('/admin/models'));
       }
       const raw = await apiFetch<{ data?: StatusRow[] }>('/v1/models/status');
       const arr = Array.isArray(raw?.data) ? raw.data : [];
@@ -112,21 +102,29 @@ export default function ModelsPage() {
   const archive = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}/archive`, { method: 'POST' }),
     onSuccess: () => { invalidate(); setArchiveId(null); addToast({ title: 'Model archived', kind: 'success' }); },
+    onError: (e: unknown) => addToast({ title: 'Could not archive', description: errMsg(e), kind: 'error' }),
   });
   const del = useMutation({
     mutationFn: async (id: number) => apiFetch(`/admin/models/${id}`, { method: 'DELETE' }),
     onSuccess: () => { invalidate(); setDeleteId(null); addToast({ title: 'Model deleted', kind: 'success' }); },
+    onError: (e: unknown) => addToast({ title: 'Could not delete', description: errMsg(e), kind: 'error' }),
   });
+  // Save first; a failed restart must not read as "save failed" (the configuration is already stored).
   const apply = useMutation({
     mutationFn: async ({ id, body }: { id: number; body: Record<string, unknown> }) => {
       await apiFetch(`/admin/models/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
-      return apiFetch<{ status?: string; restarted?: boolean; error?: string }>(`/admin/models/${id}/apply`, { method: 'POST' });
+      try {
+        const r = await apiFetch<{ status?: string; restarted?: boolean }>(`/admin/models/${id}/apply`, { method: 'POST' });
+        return { saved: true as const, apply: r, applyError: null as string | null };
+      } catch (e) {
+        return { saved: true as const, apply: null, applyError: errMsg(e) };
+      }
     },
     onSuccess: (r) => {
       invalidate(); setConfigId(null);
-      if (r?.status === 'saved') addToast({ title: 'Configuration saved', description: 'Applies the next time the model starts', kind: 'success' });
-      else if (r?.status === 'failed') addToast({ title: 'Saved, but restart failed', description: r?.error || "Check 'Logs' for details", kind: 'error' });
-      else addToast({ title: 'Configuration saved', description: 'Model is restarting with the new settings', kind: 'info' });
+      if (r.applyError) addToast({ title: 'Configuration saved, but the restart failed', description: r.applyError, kind: 'error' });
+      else if (r.apply?.restarted) addToast({ title: 'Configuration saved', description: 'The model is restarting with the new settings', kind: 'info' });
+      else addToast({ title: 'Configuration saved', description: 'Applies the next time the model starts', kind: 'success' });
     },
     onError: (e: unknown) => { const f = describeStartError(e); addToast({ title: `Save failed: ${f.title}`, description: f.description, kind: 'error' }); },
   });
@@ -172,7 +170,7 @@ export default function ModelsPage() {
 
   return (
     <section className="space-y-4">
-      <PageHeader title="Models & Pools" actions={isAdmin && (
+      <PageHeader title="Models" actions={isAdmin && (
         <div className="flex items-center gap-2">
           <Button variant="default" size="sm" onClick={() => setCalcOpen(true)}><span className="mr-1">🧮</span> Calculator</Button>
           <Button variant="purple" size="sm" onClick={() => setMyRecipesOpen(true)}><span className="mr-1">📜</span> Recipes</Button>
@@ -194,7 +192,7 @@ export default function ModelsPage() {
       {isAdmin && models.some((m) => m.archived) && (
         <Card className="p-0 overflow-hidden border-white/5 bg-white/[0.01]">
           <div className="px-4 py-2 border-b border-white/5 bg-white/[0.02]"><SectionTitle variant="blue" className="mb-0 text-[10px]">Vaulted Configurations</SectionTitle></div>
-          <ArchivedModelsTable models={models.filter((m) => m.archived)} actions={actions} />
+          <ArchivedModelsTable models={models.filter((m) => m.archived)} actions={actions} pending={pending} />
         </Card>
       )}
 
@@ -231,7 +229,7 @@ export default function ModelsPage() {
         <ConfirmDialog open={archiveId != null} title="Archive Model?" description="Archiving hides this model from the main table; it can be deleted from the vault." pending={archive.isPending} pendingLabel="Archiving…" error={archive.isError ? errMsg(archive.error) : null} onConfirm={() => archiveId != null && archive.mutate(archiveId)} onClose={() => { setArchiveId(null); archive.reset(); }} />
       )}
       {isAdmin && (
-        <ConfirmDialog open={deleteId != null} title="Delete Configuration?" description="The model files on disk are preserved; only the Cortex configuration is removed." confirmLabel="Delete" danger pending={del.isPending} pendingLabel="Deleting…" error={del.isError ? errMsg(del.error) : null} onConfirm={() => deleteId != null && del.mutate(deleteId)} onClose={() => { setDeleteId(null); del.reset(); }} />
+        <ConfirmDialog open={deleteId != null} title="Delete Configuration?" description="The model files on disk are preserved. The Cortex configuration and any recipes saved from this model are removed." confirmLabel="Delete" danger pending={del.isPending} pendingLabel="Deleting…" error={del.isError ? errMsg(del.error) : null} onConfirm={() => deleteId != null && del.mutate(deleteId)} onClose={() => { setDeleteId(null); del.reset(); }} />
       )}
       {isAdmin && (
         <ConfirmDialog

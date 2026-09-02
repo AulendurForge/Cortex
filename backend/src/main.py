@@ -6,7 +6,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from .metrics import REQ_COUNT, LATENCY, UPSTREAM_LATENCY, UPSTREAM_LATENCY_BY_UPSTREAM, STREAM_TTFT_SECONDS, UPSTREAM_SELECTED
 from .config import Settings, get_settings
 from .routes.openai import router as openai_router
-from .routes.keys import router as keys_router
+from .routes.keys import router as keys_router, me_router as me_keys_router
 from .routes.admin import router as admin_router
 from .routes.authn import router as authn_router
 from .routes.orgs import router as orgs_router
@@ -193,6 +193,8 @@ app.include_router(chat_router, prefix="/v1")
 # Every /admin route requires an admin session (individual routes may add more checks).
 _admin_only = [Depends(require_admin)]
 app.include_router(keys_router, prefix="/admin", dependencies=_admin_only)
+# self-service keys: signed-in users (any role) manage their own keys
+app.include_router(me_keys_router, prefix="/admin")
 app.include_router(admin_router, prefix="/admin", dependencies=_admin_only)
 app.include_router(authn_router, prefix="/auth")
 app.include_router(orgs_router, prefix="/admin", dependencies=_admin_only)

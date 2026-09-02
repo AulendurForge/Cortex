@@ -1,6 +1,6 @@
 # vLLM vs llama.cpp: Engine Comparison for Cortex
 
-**Date**: October 4, 2025  
+**Date**: October 4, 2025 (updated September 2, 2026 for vLLM v0.28.0 / llama.cpp b10731)  
 **Purpose**: Guide administrators in choosing the right engine for their models
 
 ---
@@ -10,9 +10,9 @@
 **Cortex supports dual inference engines:**
 
 1. **vLLM** - Primary engine for standard HuggingFace Transformers models
-2. **llama.cpp** - Secondary engine for GPT-OSS 120B and GGUF-only models
+2. **llama.cpp** - Engine for GGUF files (any model, including gpt-oss GGUF conversions)
 
-**Why both?** OpenAI's GPT-OSS 120B uses the **Harmony architecture**, which vLLM doesn't support. llama.cpp was added specifically to serve these models while maintaining Cortex's unified admin experience.
+**Why both?** The file format picks the engine. vLLM serves safetensors checkpoints, including gpt-oss (with `--reasoning-parser gpt_oss`, `--tool-call-parser openai` and `--quantization mxfp4`), with the best throughput. llama.cpp serves GGUF files, which vLLM never receives in Cortex: every GGUF, single or multi-part, runs on llama.cpp.
 
 ---
 
@@ -26,17 +26,17 @@
 ✅ High concurrency (50+ simultaneous requests)  
 ✅ Pure GPU inference with sufficient VRAM  
 
-**Examples**: Llama 3 8B/70B, Mistral 7B, Qwen 2.5, Phi-3
+**Examples**: Llama 3 8B/70B, Mistral 7B, Qwen 2.5, Phi-3, gpt-oss-20b / gpt-oss-120b (safetensors)
 
 ### Choose llama.cpp When:
 
-✅ **GPT-OSS 20B/120B (Harmony architecture)** ← **Primary use case**  
+✅ **GGUF file, single or multi-part** ← **the rule: GGUF ⇒ llama.cpp**  
 ✅ GGUF-only model (no HF checkpoint)  
 ✅ Custom/experimental architecture  
 ✅ CPU+GPU hybrid inference needed  
 ✅ Aggressive quantization (Q4_K_M, Q5_K_M)  
 
-**Examples**: GPT-OSS 120B, community GGUF quantizations
+**Examples**: community GGUF quantizations, gpt-oss GGUF conversions
 
 ---
 
@@ -49,11 +49,11 @@
 | **Supported Models** | 100+ HF architectures | Any model with GGUF |
 | **Llama family** | ✅ Excellent | ✅ Excellent |
 | **Mistral family** | ✅ Excellent | ✅ Excellent |
-| **GPT-OSS (Harmony)** | ❌ **Not supported** | ✅ **Works!** |
+| **gpt-oss** | ✅ Safetensors release (`gpt_oss` parser, `mxfp4`) | ✅ GGUF conversions |
 | **Custom architectures** | ⚠️ Requires HF integration | ✅ Works if GGUF exists |
 | **trust_remote_code** | ⚠️ Limited support | ✅ N/A (loads from GGUF) |
 
-**Winner for GPT-OSS**: llama.cpp (only option)  
+**gpt-oss**: vLLM for the safetensors release; llama.cpp for GGUF conversions  
 **Winner for standard models**: vLLM (better performance)
 
 ### Performance
@@ -93,7 +93,7 @@
 | **Model format** | HF Transformers, (GGUF exp) | GGUF only |
 | **Online download** | ✅ From HuggingFace | ❌ Local files only |
 | **Offline mode** | ✅ Local HF format | ✅ Local GGUF |
-| **Multi-file models** | ✅ SafeTensors shards | ⚠️ GGUF must be single-file |
+| **Multi-file models** | ✅ SafeTensors shards | ✅ Split GGUF loads natively (point at the first part) |
 
 **Deployment winner**: Tie (different use cases)
 
@@ -150,25 +150,26 @@ Performance: Mostly fast (GPU), slight slowdown on CPU layers
 ```
 Model: GPT-OSS 120B Abliterated
 Size: 240GB (BF16 weights)
-Architecture: Harmony (custom)
+Format: BF16 GGUF conversion (no MXFP4 checkpoint on this host)
 Available VRAM: 184GB (4x L40S)
 ```
 
-**Problem**: Model doesn't fit, and vLLM doesn't support architecture!
+**Problem**: 240 GB of BF16 weights do not fit in 184 GB of VRAM.
 
-### vLLM Attempt (Fails)
+### vLLM with the BF16 conversion (does not fit)
 
 ```bash
 vllm serve huihui-ai/Huihui-gpt-oss-120b-BF16-abliterated \
   --tensor-parallel-size 4 \
   --gpu-memory-utilization 0.92
 
-Error: Architecture 'harmony' is not supported by vLLM ❌
-
-# Even if architecture was supported:
 # 240GB weights / 4 GPUs = 60GB per GPU
 # 60GB > 46GB available → OOM ❌
 ```
+
+vLLM does serve gpt-oss: the official `openai/gpt-oss-120b` checkpoint ships MXFP4 experts (~60 GB) and runs
+with `--reasoning-parser gpt_oss --tool-call-parser openai --quantization mxfp4` (see the vLLM Recipes gpt-oss
+guide). This example is about a BF16 *conversion* that only exists as a GGUF on the host.
 
 ### llama.cpp Solution (Works!)
 
@@ -232,7 +233,7 @@ Mistral 7B (chat):
 
 **llama.cpp models** (special cases):
 ```
-GPT-OSS 120B (Harmony):
+GPT-OSS 120B (Q8_0 GGUF):
   Engine: llama.cpp
   Quantization: Q8_0
   GPU Layers: 999
@@ -240,7 +241,7 @@ GPT-OSS 120B (Harmony):
   Throughput: ~10 tok/sec
   Concurrency: 1-2
 
-Reason: vLLM doesn't support Harmony architecture
+Reason: the model is only available as GGUF on this host
 ```
 
 **Result:**
@@ -261,7 +262,7 @@ Reason: vLLM doesn't support Harmony architecture
 3. Mode: Online or Offline
 4. Repo ID / Local Path: meta-llama/Llama-3-8B-Instruct
 5. Configure: TP size, dtype, memory settings
-6. Click "Create" → "Start"
+6. Click "Launch Model" → "Start"
 7. vLLM container spins up
 8. Model serves at http://cortex-ip:8084/v1/chat/completions
 ```
@@ -274,7 +275,7 @@ Reason: vLLM doesn't support Harmony architecture
 3. Mode: Offline (required for llama.cpp)
 4. Local Path: Browse to GGUF file
 5. Configure: GPU layers, tensor split, context
-6. Click "Create" → "Start"
+6. Click "Launch Model" → "Start"
 7. llama.cpp container spins up
 8. Model serves at same endpoint (gateway routes by name)
 ```
@@ -307,16 +308,16 @@ Reason: vLLM doesn't support Harmony architecture
 - Slower throughput (50-60% of vLLM)
 - Lower concurrency (1-4 vs 50+)
 - Manual quantization workflow
-- Custom Docker image maintenance
+- Lower concurrency than vLLM
 
 **Benefits:**
-- **Supports any architecture** (critical for GPT-OSS)
+- **Serves any GGUF**, whatever the architecture
 - Aggressive quantization (4x+ compression)
 - CPU+GPU hybrid (flexible deployment)
 - Single-file GGUF (easy distribution)
 - Works when vLLM can't
 
-**ROI**: Essential for unsupported models, high for GPT-OSS use case
+**ROI**: Essential for GGUF-only models and tight VRAM
 
 ---
 
@@ -393,12 +394,11 @@ Best on: Hybrid CPU+GPU servers
 # Complexity: Low-Medium
 
 # Maintenance:
-# - Build custom Docker image
-# - Update for new llama.cpp releases
+# - Bump the pinned ghcr.io/ggml-org/llama.cpp server-cuda build in versions.env
 # - GGUF compatibility tracking
 ```
 
-**Maintenance burden**: llama.cpp slightly higher (custom image)
+**Maintenance burden**: similar (both images are pinned in `versions.env`)
 
 ### Testing Requirements
 
@@ -627,11 +627,8 @@ engine_type: 'vllm' | 'llamacpp'
 ```
 Choose Engine for New Model
 │
-├─ Is it GPT-OSS 20B/120B (Harmony)?
-│  └─ YES → llama.cpp (only option)
-│
-├─ Is it GGUF-only (no HF checkpoint)?
-│  └─ YES → llama.cpp (native format)
+├─ Is it a GGUF file (single or split)?
+│  └─ YES → llama.cpp (always; the gateway rejects GGUF under vLLM)
 │
 ├─ Is architecture in HF Transformers?
 │  ├─ NO → llama.cpp (flexible)
@@ -654,7 +651,7 @@ Choose Engine for New Model
 ### vLLM → llama.cpp
 
 **When to migrate:**
-- vLLM doesn't support your model
+- Only a GGUF of the model is available
 - Need aggressive quantization (Q4_K_M)
 - VRAM constraints require CPU offload
 
@@ -734,15 +731,12 @@ Cost: 27.8 hours × 4 GPUs × $2 = $222.40
 ### vLLM Evolution
 
 **Expected improvements:**
-- More architecture support (maybe Harmony eventually?)
 - Better FP8 quantization
 - Multi-node simplification
 - Speculative decoding maturity
 
 **Cortex will track**:
-- Update when new architectures added
-- Test GPT-OSS compatibility periodically
-- Could migrate GPT-OSS to vLLM if supported
+- Bump `VLLM_IMAGE` in `versions.env` after testing a new release
 
 ### llama.cpp Evolution
 
@@ -769,10 +763,10 @@ Cost: 27.8 hours × 4 GPUs × $2 = $222.40
 2. **llama.cpp** = Compatibility savior for the other 5%
 3. **Together** = Complete solution
 
-**Specifically for GPT-OSS 120B:**
-- vLLM: ❌ Doesn't support Harmony architecture
-- llama.cpp: ✅ Works perfectly with Q8_0 GGUF
-- **Conclusion**: llama.cpp integration was essential
+**Specifically for gpt-oss:**
+- vLLM: ✅ the safetensors release (`gpt_oss` reasoning parser, `mxfp4`)
+- llama.cpp: ✅ GGUF conversions (Q8_0 and below)
+- **Conclusion**: the file format picks the engine
 
 **User perspective:**
 - Transparent engine selection
@@ -791,7 +785,7 @@ Cost: 27.8 hours × 4 GPUs × $2 = $222.40
 ## Key Takeaways
 
 1. **vLLM** for standard HF models - unbeatable performance
-2. **llama.cpp** for GPT-OSS 120B - only option that works
+2. **llama.cpp** for every GGUF file - single or multi-part
 3. **Both** coexist in Cortex - best of both worlds
 4. **Gateway** abstracts differences - users don't care
 5. **Admin UI** treats both equally - unified experience
@@ -807,8 +801,7 @@ Cost: 27.8 hours × 4 GPUs × $2 = $222.40
 ```
 Model to serve: ?
 
-├─ GPT-OSS 120B? → llama.cpp
-├─ GGUF only? → llama.cpp
+├─ GGUF file? → llama.cpp (always)
 ├─ HF Transformers? → vLLM (unless custom architecture)
 ├─ Need max throughput? → vLLM
 ├─ Need aggressive quantization? → llama.cpp
@@ -823,7 +816,7 @@ vLLM (standard model):
 - Concurrency: Excellent (40+ requests)
 - Memory: Efficient (PagedAttention)
 
-llama.cpp (GPT-OSS 120B):
+llama.cpp (120B Q8_0 GGUF):
 - Throughput: Moderate (8-15 tok/sec)
 - Concurrency: Limited (1-2 requests)
 - Memory: Flexible (CPU offload)
@@ -838,9 +831,8 @@ Cortex now provides **automatic engine recommendations** when you browse model f
 | Detected Files | Recommended Engine | Reason |
 |----------------|-------------------|--------|
 | SafeTensors + GGUF | vLLM + SafeTensors | Best vLLM performance |
-| Multi-part GGUF only | llama.cpp | Only engine supporting split files |
+| Multi-part GGUF only | llama.cpp | Loads split files natively |
 | Single GGUF only | llama.cpp | Native GGUF support |
-| GPT-OSS/Harmony | llama.cpp | vLLM doesn't support architecture |
 
 **In the UI**: Guidance banners appear with one-click actions to switch engines or formats.
 

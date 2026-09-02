@@ -9,17 +9,16 @@ FROM ${DEPS_IMAGE} AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build
 
 FROM ${NODE_IMAGE} AS prod
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
-COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/.next ./.next
-COPY --from=build --chown=node:node /app/next.config.mjs ./
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3001 HOSTNAME=0.0.0.0
+# `output: 'standalone'` emits a minimal server with only the modules it needs
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
-    CMD wget -qO- http://127.0.0.1:3001/login >/dev/null 2>&1 || exit 1
-CMD ["npm", "run", "start"]
+    CMD wget -qO- http://127.0.0.1:3001/runtime-config.js >/dev/null 2>&1 || exit 1
+CMD ["node", "server.js"]

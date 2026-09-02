@@ -1,8 +1,8 @@
 import React from 'react';
 import { z } from 'zod';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import apiFetch, { ApiError } from '../../../src/lib/api-clients';
-import { ModelItem, ModelListSchema } from '../../../src/lib/validators';
+import apiFetch, { ApiError } from '@/lib/api-clients';
+import { ModelItem, ModelListSchema } from '@/lib/validators';
 
 // ---------------------------------------------------------------------------
 // Zod schemas for /admin/bundles (+ the database-restore endpoints it reuses)
@@ -240,56 +240,8 @@ export type DbRestoreRequest = { output_dir: string; backup_first: boolean; drop
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-/** Decimal units (1 GB = 1e9 bytes), matching the sizes the gateway logs. */
-export function formatBytes(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return '—';
-  if (n < 0) return '—';
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
-  return `${Math.round(n)} B`;
-}
-
-/** Accepts ISO strings or epoch seconds/milliseconds. */
-export function toMillis(v: string | number | null | undefined): number | null {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? null : t;
-}
-
-export function relativeTime(v: string | number | null | undefined, now: number = Date.now()): string {
-  const t = toMillis(v);
-  if (t == null) return '—';
-  const diff = Math.round((now - t) / 1000);
-  const abs = Math.abs(diff);
-  const suffix = diff >= 0 ? 'ago' : 'from now';
-  if (abs < 45) return 'just now';
-  if (abs < 3600) return `${Math.round(abs / 60)} min ${suffix}`;
-  if (abs < 86400) return `${Math.round(abs / 3600)} h ${suffix}`;
-  if (abs < 30 * 86400) {
-    const d = Math.round(abs / 86400);
-    return `${d} day${d === 1 ? '' : 's'} ${suffix}`;
-  }
-  return new Date(t).toLocaleDateString();
-}
-
-export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
-export function errMsg(e: unknown): string {
-  const a = e as Partial<ApiError> | undefined;
-  if (a && typeof a.message === 'string' && a.message) return a.message;
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
+export { formatBytes, toMillis, relativeTime, formatDuration } from '@/lib/format';
+export { errMsg } from '@/lib/errors';
 
 export const JOB_TYPE_LABELS: Record<string, string> = {
   bundle_export: 'Export',

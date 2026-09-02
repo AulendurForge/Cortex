@@ -114,7 +114,7 @@ function ModelRow({ m, isAdmin, actions, pending }: { m: ModelItem; isAdmin: boo
               </Button>
             )}
             <Button size="sm" onClick={() => actions.onConfig(m.id)} aria-label={`Configure ${m.name}`}>Config</Button>
-            <Button size="sm" onClick={() => actions.onArchive(m.id)} aria-label={`Archive ${m.name}`}>Archive</Button>
+            <Button size="sm" onClick={() => actions.onArchive(m.id)} disabled={!(m.state === 'stopped' || m.state === 'failed')} title={m.state === 'stopped' || m.state === 'failed' ? undefined : 'Stop the model before archiving it'} aria-label={`Archive ${m.name}`}>Archive</Button>
           </div>
         </td>
       )}
@@ -145,7 +145,7 @@ export function ModelsTable({ models, isAdmin, actions, pending, isLoading }: { 
   );
 }
 
-export function ArchivedModelsTable({ models, actions }: { models: ModelItem[]; actions: Pick<ModelActions, 'onLogs' | 'onDelete'> }) {
+export function ArchivedModelsTable({ models, actions, pending }: { models: ModelItem[]; actions: Pick<ModelActions, 'onLogs' | 'onDelete' | 'onStop'>; pending?: { stoppingId: number | null } }) {
   return (
     <Table>
       <thead>
@@ -163,7 +163,10 @@ export function ArchivedModelsTable({ models, actions }: { models: ModelItem[]; 
             <td className="text-right">
               <div className="flex items-center justify-end gap-1.5">
                 <Button size="sm" onClick={() => actions.onLogs(m.id)}>Logs</Button>
-                <Button size="sm" variant="danger" onClick={() => actions.onDelete(m.id)}>Delete</Button>
+                {(m.state === 'running' || m.state === 'loading' || m.state === 'starting') && (
+                  <Button size="sm" variant="danger" onClick={() => actions.onStop(m.id)} loading={pending?.stoppingId === m.id} aria-label={`Stop ${m.name}`}>Stop</Button>
+                )}
+                <Button size="sm" variant="danger" onClick={() => actions.onDelete(m.id)} disabled={m.state === 'running' || m.state === 'loading' || m.state === 'starting'}>Delete</Button>
               </div>
             </td>
           </tr>

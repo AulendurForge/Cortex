@@ -40,6 +40,8 @@ export type MemoryBreakdown = {
     vramTotalBytes?: number;
     vramUsedBytes?: number;
     vramFreeBytes?: number;
+    /** False when the GPU's capacity is unknown (no DCGM/NVML data): "fits" cannot be judged. */
+    vramKnown: boolean;
     fits: boolean;
   }>;
 };
@@ -99,7 +101,8 @@ export function breakdownMemory(meta: ModelMeta, work: Workload, choices: Choice
     const vramTotalBytes = (g.mem_total_mb || 0) * 1024 * 1024;
     const vramUsedBytes = (g.mem_used_mb || 0) * 1024 * 1024;
     const vramFreeBytes = Math.max(0, vramTotalBytes - vramUsedBytes);
-    const fits = vramFreeBytes > 0 ? total <= vramFreeBytes : true; // be lenient if unknown
+    const vramKnown = vramTotalBytes > 0;
+    const fits = vramKnown ? total <= vramFreeBytes : false;
     return {
       index: g.index,
       weightsBytes: weightsPer,
@@ -109,6 +112,7 @@ export function breakdownMemory(meta: ModelMeta, work: Workload, choices: Choice
       vramTotalBytes,
       vramUsedBytes,
       vramFreeBytes,
+      vramKnown,
       fits,
     };
   });
@@ -120,8 +124,16 @@ export function breakdownMemory(meta: ModelMeta, work: Workload, choices: Choice
   };
 }
 
-export function recommendGpuMemoryUtilization(): number {
-  return 0.9; // sensible default; adjusted later by user
+/**
+ * vLLM's gpu_memory_utilization is the fraction of each GPU vLLM may claim. Recommend the
+ * projected need plus a 5 % margin (so the KV cache is not starved), clamped to 0.5–0.95;
+ * 0.9 when the capacity is unknown.
+ */
+export function recommendGpuMemoryUtilization(summary?: { perGpu: Array<{ totalBytes: number; vramTotalBytes?: number; vramKnown?: boolean }> } | null): number {
+  const known = (summary?.perGpu ?? []).filter((p) => p.vramKnown && (p.vramTotalBytes ?? 0) > 0);
+  if (known.length === 0) return 0.9;
+  const need = Math.max(...known.map((p) => p.totalBytes / (p.vramTotalBytes as number)));
+  return Math.round(Math.min(0.95, Math.max(0.5, need + 0.05)) * 100) / 100;
 }
 
 export function bytesToGiB(n: number): number {

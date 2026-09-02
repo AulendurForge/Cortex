@@ -21,7 +21,6 @@ export type ModelFormValues = {
   task: 'generate' | 'embed';
   engine_type?: EngineType;
   hf_token?: string;
-  hf_offline?: boolean;
   // --- common (both engines) ---
   engine_image?: string;
   engine_version?: string;
@@ -182,7 +181,6 @@ export const ADD_DEFAULTS: Partial<ModelFormValues> = {
   gpu_memory_utilization: 0.9,
   enforce_eager: false,
   trust_remote_code: false,
-  hf_offline: false,
   // llama.cpp (ngl / threads / parallel_slots stay empty = auto)
   batch_size: 2048,
   ubatch_size: 512,
@@ -193,22 +191,20 @@ export const ADD_DEFAULTS: Partial<ModelFormValues> = {
 
 /** Identity / create-only keys that are not engine spec fields. */
 const NON_SPEC_KEYS = new Set<string>([
-  'mode', 'repo_id', 'local_path', 'name', 'served_model_name', 'task', 'engine_type', 'hf_token', 'hf_offline',
+  'mode', 'repo_id', 'local_path', 'name', 'served_model_name', 'task', 'engine_type', 'hf_token',
   ...SAMPLING_FIELDS, 'custom_request_json',
 ]);
 
 /** Static fallback lists derived from the bundled spec (the live spec wins at runtime). */
 export const VLLM_ONLY_FIELDS: ReadonlyArray<string> = [
-  ...otherEngineOnlyFields(STATIC_ENGINE_SPEC, 'llamacpp'), 'hf_offline',
+  ...otherEngineOnlyFields(STATIC_ENGINE_SPEC, 'llamacpp'),
 ];
 export const LLAMACPP_ONLY_FIELDS: ReadonlyArray<string> = [...otherEngineOnlyFields(STATIC_ENGINE_SPEC, 'vllm')];
 
 /** Fields the given engine must not submit (the other engine's exclusive fields). */
 export function fieldsToSkip(engine: EngineType, spec?: EngineSpec | null): Set<string> {
   if (spec) {
-    const s = otherEngineOnlyFields(spec, engine);
-    if (engine === 'llamacpp') s.add('hf_offline');
-    return s;
+    return otherEngineOnlyFields(spec, engine);
   }
   return new Set<string>(engine === 'llamacpp' ? VLLM_ONLY_FIELDS : LLAMACPP_ONLY_FIELDS);
 }

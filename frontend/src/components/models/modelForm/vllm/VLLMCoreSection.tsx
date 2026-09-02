@@ -119,12 +119,6 @@ export function VLLMCoreSection({ values, onChange, spec, gpus, gpuCount }: Engi
           onChange={(v) => onChange('trust_remote_code', v)}
           tooltip="--trust-remote-code. Required for checkpoints that ship custom model classes (Nemotron, some Qwen/DeepSeek). Only enable for sources you trust."
         />
-        <BoolField
-          label="HF offline"
-          value={values.hf_offline}
-          onChange={(v) => onChange('hf_offline', v)}
-          tooltip="Sets HF_HUB_OFFLINE=1 so vLLM never contacts Hugging Face. Weights, tokenizer and config must already be local."
-        />
       </div>
     </>
   );

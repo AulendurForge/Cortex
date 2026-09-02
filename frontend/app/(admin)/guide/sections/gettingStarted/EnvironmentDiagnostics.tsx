@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
-import { useToast } from '../../../../../src/providers/ToastProvider';
-import { safeCopyToClipboard } from '../../../../../src/lib/clipboard';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { useToast } from '@/providers/ToastProvider';
+import { safeCopyToClipboard } from '@/lib/clipboard';
+import { Attribution } from '../Attribution';
 
 export default function EnvironmentDiagnostics() {
   const { addToast } = useToast();
@@ -24,7 +25,7 @@ export default function EnvironmentDiagnostics() {
       <Card className="p-5 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 border-white/5">
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">🔧</span>
+            <span className="text-2xl" aria-hidden="true">🔧</span>
             <h2 className="text-lg font-bold text-white">Environment Diagnostics</h2>
           </div>
           <p className="text-[13px] text-white/80 leading-relaxed">
@@ -59,7 +60,7 @@ export default function EnvironmentDiagnostics() {
             />
             <DiagnosticCommand 
               title="Docker GPU Access"
-              command="docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi"
+              command="docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi"
               successIndicator="GPU info displayed inside container"
               failureIndicator="GPU access denied or CUDA error"
               onCopy={copyToClipboard}
@@ -99,27 +100,33 @@ export default function EnvironmentDiagnostics() {
               <table className="w-full text-[11px]">
                 <thead>
                   <tr className="text-left text-white/50">
-                    <th className="pb-2">CUDA Version</th>
-                    <th className="pb-2">Min Driver</th>
+                    <th className="pb-2">Engine image</th>
+                    <th className="pb-2">CUDA</th>
+                    <th className="pb-2">Min driver</th>
                   </tr>
                 </thead>
                 <tbody className="text-white/70">
                   <tr className="border-t border-white/5">
-                    <td className="py-2">CUDA 12.9+</td>
-                    <td className="py-2 text-emerald-300 font-mono">575.51.03</td>
+                    <td className="py-2">vLLM v0.28.0 (default)</td>
+                    <td className="py-2">13</td>
+                    <td className="py-2 text-emerald-300 font-mono">580</td>
                   </tr>
                   <tr className="border-t border-white/5">
-                    <td className="py-2">CUDA 12.8</td>
-                    <td className="py-2 font-mono">525.60.13</td>
+                    <td className="py-2">vLLM v0.28.0-cu129 (drivers 550–579)</td>
+                    <td className="py-2">12.9</td>
+                    <td className="py-2 font-mono">550</td>
                   </tr>
                   <tr className="border-t border-white/5">
-                    <td className="py-2">CUDA 12.6-12.7</td>
-                    <td className="py-2 font-mono">525.60.13</td>
+                    <td className="py-2">llama.cpp b10731</td>
+                    <td className="py-2">12.8</td>
+                    <td className="py-2 font-mono">570</td>
                   </tr>
                 </tbody>
               </table>
               <InfoBox variant="blue" className="text-[10px] p-2">
-                Most recent vLLM and llama.cpp images use CUDA 12.9+, requiring driver 575 or newer.
+                The pinned vLLM image (v0.28.0) is a CUDA 13 build and needs driver 580 or newer. On drivers 550–579 set{' '}
+                <code className="bg-black/30 px-1 rounded">VLLM_IMAGE=vllm/vllm-openai:v0.28.0-cu129</code> in <code className="bg-black/30 px-1 rounded">.env</code>.
+                llama.cpp b10731 is a CUDA 12.8 build and needs driver 570 or newer.
               </InfoBox>
             </div>
 
@@ -142,14 +149,14 @@ export default function EnvironmentDiagnostics() {
           {/* Update Instructions */}
           <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-amber-300">⚠️</span>
+              <span className="text-amber-300" aria-hidden="true">⚠️</span>
               <div className="text-[11px] font-bold text-amber-300">Need to Update Drivers?</div>
             </div>
             <div className="text-[11px] text-white/70 space-y-2">
               <p>If your driver is below the required version, update using your distribution's package manager:</p>
               <CommandWithOutput 
-                command="sudo apt update && sudo apt install nvidia-driver-575"
-                description="Ubuntu/Debian - install driver 575"
+                command="sudo apt update && sudo apt install nvidia-driver-580"
+                description="Ubuntu/Debian - install driver 580 (570 is enough for llama.cpp only)"
                 onCopy={copyToClipboard}
               />
               <p className="text-white/50 text-[10px]">
@@ -183,7 +190,7 @@ export default function EnvironmentDiagnostics() {
               />
               <CommandWithOutput 
                 command="docker --version"
-                description="Should show Docker version 20.10+"
+                description="Should show Docker Engine 24 or newer"
                 onCopy={copyToClipboard}
               />
             </div>
@@ -231,7 +238,7 @@ export default function EnvironmentDiagnostics() {
             <div className="space-y-2">
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">3. Test GPU Access in Docker</div>
               <CommandWithOutput 
-                command="docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi"
+                command="docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi"
                 description="Should show your GPUs inside the container"
                 onCopy={copyToClipboard}
               />
@@ -310,7 +317,7 @@ export default function EnvironmentDiagnostics() {
               "System rebooted after failed installation"
             ]}
             solutions={[
-              "Install drivers: sudo apt install nvidia-driver-575",
+              "Install drivers: sudo apt install nvidia-driver-580",
               "Verify installation: dpkg -l | grep nvidia",
               "Check kernel module: lsmod | grep nvidia",
               "Reboot if drivers were just installed"
@@ -355,10 +362,10 @@ export default function EnvironmentDiagnostics() {
             issue="CUDA version mismatch"
             causes={[
               "Driver too old for container's CUDA version",
-              "Container requires CUDA 12.9+ but driver only supports 12.8"
+              "vLLM v0.28.0 needs CUDA 13 (driver 580+); llama.cpp b10731 needs CUDA 12.8 (driver 570+)"
             ]}
             solutions={[
-              "Update NVIDIA driver to 575+ for CUDA 12.9 support",
+              "Update the NVIDIA driver to 580+, or set VLLM_IMAGE=vllm/vllm-openai:v0.28.0-cu129 on drivers 550–579",
               "Check container CUDA version in error message",
               "After driver update: sudo systemctl restart docker"
             ]}
@@ -376,7 +383,7 @@ export default function EnvironmentDiagnostics() {
               "Create directory: sudo mkdir -p /var/cortex/models",
               "Set ownership: sudo chown -R $USER:$USER /var/cortex/models",
               "Verify Docker compose mounts the correct path",
-              "Check CORTEX_MODELS_DIR_HOST environment variable"
+              "Check CORTEX_MODELS_DIR in .env (compose mounts it at /var/cortex/models inside the gateway)"
             ]}
             color="emerald"
           />
@@ -407,7 +414,7 @@ export default function EnvironmentDiagnostics() {
             <RequirementCard 
               category="Operating System"
               items={[
-                { label: 'Linux', required: true, detail: 'Ubuntu 20.04+, Debian 11+, RHEL 8+' },
+                { label: 'Linux', required: true, detail: 'Ubuntu 22.04 / 24.04 or RHEL 9' },
                 { label: 'Kernel', required: true, detail: '5.4+ (for GPU support)' },
                 { label: 'x86_64', required: true, detail: '64-bit architecture' },
               ]}
@@ -415,7 +422,7 @@ export default function EnvironmentDiagnostics() {
             <RequirementCard 
               category="Docker"
               items={[
-                { label: 'Docker Engine', required: true, detail: 'Version 20.10+' },
+                { label: 'Docker Engine', required: true, detail: 'Version 24+' },
                 { label: 'Docker Compose', required: true, detail: 'Version 2.0+' },
                 { label: 'NVIDIA Toolkit', required: true, detail: 'For GPU containers' },
               ]}
@@ -424,14 +431,14 @@ export default function EnvironmentDiagnostics() {
               category="GPU (for inference)"
               items={[
                 { label: 'NVIDIA GPU', required: true, detail: 'Compute capability 7.0+' },
-                { label: 'Driver', required: true, detail: '575+ for CUDA 12.9' },
+                { label: 'Driver', required: true, detail: '580+ for vLLM v0.28.0 (CUDA 13); 570+ for llama.cpp' },
                 { label: 'VRAM', required: true, detail: 'Varies by model size' },
               ]}
             />
             <RequirementCard 
               category="Memory"
               items={[
-                { label: 'System RAM', required: true, detail: '16 GB minimum' },
+                { label: 'System RAM', required: true, detail: '8 GB minimum for the stack; models need more' },
                 { label: 'GPU VRAM', required: true, detail: '8 GB+ recommended' },
                 { label: 'Swap', required: false, detail: 'Helps with large models' },
               ]}
@@ -447,8 +454,8 @@ export default function EnvironmentDiagnostics() {
             <RequirementCard 
               category="Network"
               items={[
-                { label: 'Port 8084', required: true, detail: 'API Gateway' },
-                { label: 'Port 3001', required: true, detail: 'Admin UI' },
+                { label: 'Port 8084', required: true, detail: 'API gateway (host network)' },
+                { label: 'Port 3001', required: true, detail: 'Admin UI (default; FRONTEND_PORT in .env)' },
                 { label: 'HuggingFace', required: false, detail: 'For online model downloads' },
               ]}
             />
@@ -507,9 +514,7 @@ export default function EnvironmentDiagnostics() {
         </div>
       </Card>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Environment Diagnostics • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Environment Diagnostics" />
     </section>
   );
 }
@@ -532,7 +537,7 @@ echo "--- NVIDIA Container Toolkit ---"
 nvidia-container-cli --version 2>/dev/null || echo "NVIDIA Container Toolkit not found"
 echo ""
 echo "--- Docker GPU Test ---"
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "Docker GPU test failed"
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "Docker GPU test failed"
 echo ""
 echo "--- Models Directory ---"
 ls -la /var/cortex/models 2>/dev/null || echo "/var/cortex/models not found"
@@ -646,7 +651,7 @@ function IssueCard({
             <ul className="space-y-1 text-[10px] text-white/60">
               {causes.map((c, i) => (
                 <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-amber-400 mt-0.5">?</span>
+                  <span className="text-amber-400 mt-0.5" aria-hidden="true">?</span>
                   <span>{c}</span>
                 </li>
               ))}
@@ -658,7 +663,7 @@ function IssueCard({
             <ul className="space-y-1 text-[10px] text-white/70">
               {solutions.map((s, i) => (
                 <li key={i} className="flex items-start gap-1.5">
-                  <span className="text-emerald-400 mt-0.5">→</span>
+                  <span className="text-emerald-400 mt-0.5" aria-hidden="true">→</span>
                   <span>{s}</span>
                 </li>
               ))}

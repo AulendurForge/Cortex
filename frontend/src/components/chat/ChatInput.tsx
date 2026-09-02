@@ -65,10 +65,10 @@ export function ChatInput({
   return (
     <div className="border-t border-white/5 p-4 bg-black/20">
       {/* Context usage bar */}
-      {contextLimit && (
+      {contextLimit != null && contextLimit > 0 && (
         <div className="mb-3">
           <div className="flex items-center justify-between text-[10px] text-white/40 mb-1">
-            <span>Context Usage</span>
+            <span>Context used (estimate)</span>
             <span className={cn(isOverLimit && 'text-red-400')}>
               ~{totalContext.toLocaleString()} / {contextLimit.toLocaleString()} tokens
             </span>
@@ -99,6 +99,7 @@ export function ChatInput({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled}
+            aria-label="Message"
             rows={1}
             className={cn(
               'w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl',
@@ -125,6 +126,7 @@ export function ChatInput({
             variant="danger"
             size="sm"
             className="self-end px-4 py-3"
+            aria-label="Stop generating"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -137,6 +139,7 @@ export function ChatInput({
             variant="cyan"
             size="sm"
             className="self-end px-4 py-3"
+            aria-label="Send message"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />

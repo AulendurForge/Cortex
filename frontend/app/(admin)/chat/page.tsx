@@ -1,317 +1,199 @@
 /**
- * Chat Playground Page
- * 
- * Allows users to interact with running inference models in a chat interface.
- * Features:
- * - Model selection from running models
- * - Streaming responses with real-time metrics
- * - Server-side chat persistence (user-scoped, cross-device)
- * - Context window tracking
+ * Chat Playground: talk to a running model with streaming replies, live metrics and
+ * server-side (per-user) conversation history.
  */
 
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { PageHeader, Card, InfoBox } from '../../../src/components/UI';
-import { 
-  ChatInput, 
-  ChatSidebar, 
-  MessageList, 
-  ModelSelector,
-  PerformanceMetrics,
-} from '../../../src/components/chat';
-import { useChat, ChatMessage } from '../../../src/hooks/useChat';
-import { 
-  fetchModelConstraints, 
-  ModelConstraints,
-  estimateContextUsage,
-} from '../../../src/lib/chat-client';
-import {
-  listChatSessions,
-  createChatSession,
-  getChatSession,
-  addChatMessage,
-  deleteChatSession,
-  clearAllChatSessions,
-  apiMessageToHookMessage,
-  ChatSessionSummary,
-} from '../../../src/lib/chat-api';
-import { useToast } from '../../../src/providers/ToastProvider';
+import { PageHeader, Card, InfoBox, Button } from '@/components/UI';
+import { ChatInput, ChatSidebar, MessageList, ModelSelector, PerformanceMetrics } from '@/components/chat';
+import { useChat, isPersistable } from '@/hooks/useChat';
+import { fetchModelConstraints, fetchRunningModels, estimateContextUsage } from '@/lib/chat-client';
+import { listChatSessions, createChatSession, getChatSession, addChatMessage, apiMessageToHookMessage } from '@/lib/chat-api';
+import { useToast } from '@/providers/ToastProvider';
+import { errMsg } from '@/lib/errors';
+
 
 export default function ChatPage() {
   const { addToast } = useToast();
   const queryClient = useQueryClient();
-  
-  // Current chat state
+
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [constraints, setConstraints] = useState<ModelConstraints | null>(null);
-  
-  // Determine if model is locked (has messages)
-  const [isModelLocked, setIsModelLocked] = useState(false);
-  
-  // Track last saved message count to avoid duplicate saves
-  const lastSavedCountRef = useRef(0);
+  // ids of messages already persisted for the current session
+  const savedIdsRef = useRef<Set<string>>(new Set());
+  const submittingRef = useRef(false);
 
-  // Fetch sessions from API
-  const sessionsQuery = useQuery({
-    queryKey: ['chat-sessions'],
-    queryFn: listChatSessions,
-    staleTime: 5000,
-  });
-
-  const sessions = sessionsQuery.data || [];
-
-  // Chat hook
-  const {
-    messages,
-    isStreaming,
-    error,
-    currentMetrics,
-    sendMessage,
-    stopStreaming,
-    clearChat,
-    setMessages,
-  } = useChat({
-    model: selectedModel,
-    maxTokens: constraints?.max_tokens_default ?? 512,
-    onError: (err) => {
-      addToast({ title: 'Chat Error', description: err, kind: 'error' });
-    },
-  });
-
-  // Fetch constraints when model changes
+  const sessionsQuery = useQuery({ queryKey: ['chat-sessions'], queryFn: listChatSessions, staleTime: 5_000 });
+  const runningQuery = useQuery({ queryKey: ['running-models'], queryFn: fetchRunningModels, staleTime: 5_000, refetchInterval: 10_000 });
   const constraintsQuery = useQuery({
     queryKey: ['model-constraints', selectedModel],
     queryFn: () => fetchModelConstraints(selectedModel),
     enabled: !!selectedModel,
+    staleTime: 30_000,
+    retry: false,
   });
+  const constraints = constraintsQuery.data ?? null;
+  const modelIsRunning = !!selectedModel && (runningQuery.data ?? []).some((m) => m.served_model_name === selectedModel);
 
-  // Handle constraints query results
-  useEffect(() => {
-    if (constraintsQuery.data) {
-      setConstraints(constraintsQuery.data);
-    }
-  }, [constraintsQuery.data]);
+  const chat = useChat({
+    model: selectedModel,
+    maxTokens: constraints?.max_tokens_default ?? 512,
+  });
+  const { messages, isStreaming, error, currentMetrics, sendMessage, retryLast, stopStreaming, clearChat, clearError, setMessages } = chat;
+  const isModelLocked = messages.length > 0;
 
+  // Persist finished turns once, in order; a failed save is reported and retried on the next change.
   useEffect(() => {
-    if (constraintsQuery.error) {
-      addToast({ 
-        title: 'Warning', 
-        description: 'Could not fetch model constraints', 
-        kind: 'info' 
-      });
-    }
-  }, [constraintsQuery.error, addToast]);
-
-  // Save new messages to server when they arrive
-  useEffect(() => {
-    if (!currentChatId || messages.length === 0) return;
-    if (isStreaming) return; // Don't save while streaming
-    
-    // Only save if we have new messages
-    if (messages.length <= lastSavedCountRef.current) return;
-    
-    // Save any new messages
-    const saveNewMessages = async () => {
-      for (let i = lastSavedCountRef.current; i < messages.length; i++) {
-        const msg = messages[i];
-        if (!msg) continue;
-        await addChatMessage(
-          currentChatId,
-          msg.role,
-          msg.content,
-          msg.metrics as Record<string, unknown>
-        );
+    if (!currentChatId || isStreaming) return;
+    const pending = messages.filter((m) => isPersistable(m) && !savedIdsRef.current.has(m.id));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const msg of pending) {
+        if (cancelled) return;
+        try {
+          await addChatMessage(currentChatId, msg.role, msg.content, msg.metrics as Record<string, unknown> | undefined);
+          savedIdsRef.current.add(msg.id);
+        } catch (e) {
+          addToast({ title: 'Could not save this conversation', description: errMsg(e), kind: 'error' });
+          return;
+        }
       }
-      lastSavedCountRef.current = messages.length;
-      // Refresh sessions list
       queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-    };
-    
-    saveNewMessages();
-  }, [messages, currentChatId, isStreaming, queryClient]);
+    })();
+    return () => { cancelled = true; };
+  }, [messages, currentChatId, isStreaming, queryClient, addToast]);
 
-  // Lock model when messages exist
-  useEffect(() => {
-    setIsModelLocked(messages.length > 0);
-  }, [messages]);
-
-  // Handle new chat
-  const handleNewChat = useCallback(() => {
+  const resetTo = useCallback((chatId: string | null, model: string) => {
+    stopStreaming();
     clearChat();
-    setCurrentChatId(null);
-    setSelectedModel('');
-    setConstraints(null);
-    setIsModelLocked(false);
-    lastSavedCountRef.current = 0;
-  }, [clearChat]);
+    setCurrentChatId(chatId);
+    setSelectedModel(model);
+    savedIdsRef.current = new Set();
+  }, [clearChat, stopStreaming]);
 
-  // Handle chat selection
+  const handleNewChat = useCallback(() => resetTo(null, ''), [resetTo]);
+
   const handleSelectChat = useCallback(async (chatId: string) => {
-    const session = await getChatSession(chatId);
-    if (session) {
-      setCurrentChatId(chatId);
-      setSelectedModel(session.model_name);
-      setConstraints(session.constraints);
+    try {
+      const session = await getChatSession(chatId);
+      resetTo(chatId, session.model_name);
       const hookMessages = session.messages.map((m, i) => apiMessageToHookMessage(m, i));
       setMessages(hookMessages);
-      lastSavedCountRef.current = hookMessages.length;
-      setIsModelLocked(hookMessages.length > 0);
+      savedIdsRef.current = new Set(hookMessages.map((m) => m.id));
+    } catch (e) {
+      addToast({ title: 'Could not open this chat', description: errMsg(e), kind: 'error' });
+      queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     }
-  }, [setMessages]);
+  }, [resetTo, setMessages, addToast, queryClient]);
 
-  // Handle model selection
-  const handleModelChange = useCallback(async (modelName: string) => {
+  const handleModelChange = useCallback((modelName: string) => {
     if (isModelLocked) return;
-    
+    clearError();
     setSelectedModel(modelName);
-    
-    // Create new chat session when model is selected
-    if (modelName && !currentChatId) {
-      const newSession = await createChatSession(modelName, 'vllm', null);
-      if (newSession) {
-        setCurrentChatId(newSession.id);
-        lastSavedCountRef.current = 0;
-        queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-      }
-    }
-    
-    // Fetch constraints for new model
-    if (modelName) {
-      constraintsQuery.refetch();
-    }
-  }, [isModelLocked, currentChatId, constraintsQuery, queryClient]);
+  }, [isModelLocked, clearError]);
 
-  // Handle send message
+  // The session row is created on the first message (never on mere model selection).
   const handleSendMessage = useCallback(async (content: string) => {
-    if (!selectedModel) {
-      addToast({ title: 'Select a Model', description: 'Please select a model first', kind: 'info' });
-      return;
-    }
-    
-    // Create chat if doesn't exist
-    if (!currentChatId) {
-      const newSession = await createChatSession(
-        selectedModel, 
-        constraints?.engine_type || 'vllm', 
-        constraints
-      );
-      if (newSession) {
-        setCurrentChatId(newSession.id);
-        lastSavedCountRef.current = 0;
+    if (!selectedModel || submittingRef.current || isStreaming) return;
+    submittingRef.current = true;
+    try {
+      let chatId = currentChatId;
+      if (!chatId) {
+        const s = await createChatSession(selectedModel, constraints?.engine_type, constraints);
+        chatId = s.id;
+        setCurrentChatId(chatId);
+        savedIdsRef.current = new Set();
         queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
       }
+      await sendMessage(content);
+    } catch (e) {
+      addToast({ title: 'Could not start the conversation', description: errMsg(e), kind: 'error' });
+    } finally {
+      submittingRef.current = false;
     }
-    
-    sendMessage(content);
-  }, [selectedModel, currentChatId, constraints, sendMessage, addToast, queryClient]);
+  }, [selectedModel, currentChatId, constraints, sendMessage, addToast, queryClient, isStreaming]);
 
-  // Refresh sessions list
-  const handleRefreshSessions = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-    // If current chat was deleted, reset
+  const handleRefreshSessions = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     if (currentChatId) {
-      getChatSession(currentChatId).then(session => {
-        if (!session) {
-          handleNewChat();
-        }
-      });
+      try { await getChatSession(currentChatId); } catch { handleNewChat(); }
     }
   }, [currentChatId, handleNewChat, queryClient]);
 
-  // Calculate context usage
-  const contextUsed = estimateContextUsage(messages);
+  const contextUsed = estimateContextUsage(messages.filter(isPersistable).map((m) => ({ role: m.role, content: m.content })));
   const contextLimit = constraints?.context_size || constraints?.max_model_len || undefined;
-
-  // Adapt sessions for sidebar (convert snake_case to camelCase)
-  const sidebarSessions = sessions.map(s => ({
-    id: s.id,
-    title: s.title,
-    modelName: s.model_name,
-    engineType: s.engine_type,
-    messageCount: s.message_count,
-    createdAt: s.created_at,
-    updatedAt: s.updated_at,
+  const sessions = (sessionsQuery.data ?? []).map((s) => ({
+    id: s.id, title: s.title, modelName: s.model_name, engineType: s.engine_type, messageCount: s.message_count, createdAt: s.created_at, updatedAt: s.updated_at,
   }));
+  const inputDisabled = !selectedModel || !modelIsRunning;
 
   return (
     <div className="space-y-4">
-      <PageHeader 
-        title="Chat Playground" 
-        subtitle="Test and interact with your running inference models"
-      />
+      <PageHeader title="Chat Playground" subtitle="Talk to a running model. Sampling settings come from the model's request defaults." />
 
       <Card className="p-0 overflow-hidden">
         <div className="flex h-[calc(100vh-220px)] min-h-[500px]">
-          {/* Sidebar */}
           <ChatSidebar
-            sessions={sidebarSessions}
+            sessions={sessions}
             currentChatId={currentChatId}
             onSelectChat={handleSelectChat}
             onNewChat={handleNewChat}
             onRefresh={handleRefreshSessions}
+            busy={isStreaming}
+            loadError={sessionsQuery.isError ? errMsg(sessionsQuery.error) : null}
           />
 
-          {/* Main chat area */}
-          <div className="flex-1 flex flex-col">
-            {/* Header with model selector */}
-            <div className="flex items-center justify-between p-4 border-b border-white/5 bg-black/10">
-              <ModelSelector
-                value={selectedModel}
-                onChange={handleModelChange}
-                disabled={isStreaming}
-                locked={isModelLocked}
-              />
-              
-              {/* Quick actions */}
-              <div className="flex items-center gap-2">
-                {messages.length > 0 && !isStreaming && (
-                  <button
-                    onClick={handleNewChat}
-                    className="p-2 rounded-lg text-white/40 hover:text-white/60 hover:bg-white/5 transition-colors"
-                    title="New chat"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </button>
-                )}
-              </div>
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex items-center justify-between gap-3 p-4 border-b border-white/5 bg-black/10">
+              <ModelSelector value={selectedModel} onChange={handleModelChange} disabled={isStreaming} locked={isModelLocked} models={runningQuery.data} isLoading={runningQuery.isLoading} error={runningQuery.isError ? errMsg(runningQuery.error) : null} />
+              {messages.length > 0 && (
+                <Button size="sm" onClick={handleNewChat} aria-label="Start a new chat">New chat</Button>
+              )}
             </div>
 
-            {/* Performance metrics bar */}
             <PerformanceMetrics metrics={currentMetrics} isStreaming={isStreaming} />
 
-            {/* Error display */}
             {error && (
               <div className="mx-4 mt-4">
-                <InfoBox variant="error">
-                  {error}
+                <InfoBox variant="error" role="alert">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>{error}</span>
+                    <div className="flex gap-2 shrink-0">
+                      <Button size="sm" onClick={retryLast} disabled={isStreaming}>Retry</Button>
+                      <Button size="sm" onClick={clearError}>Dismiss</Button>
+                    </div>
+                  </div>
                 </InfoBox>
               </div>
             )}
-
-            {/* Model locked warning */}
-            {isModelLocked && (
+            {selectedModel && !modelIsRunning && !runningQuery.isLoading && (
               <div className="mx-4 mt-4">
                 <InfoBox variant="warning" className="text-xs">
-                  Model selection is locked for this conversation. Start a new chat to use a different model.
+                  <strong>{selectedModel}</strong> is not running. Start it on the Models page to continue this conversation, or start a new chat with a running model.
                 </InfoBox>
               </div>
             )}
+            {constraintsQuery.isError && modelIsRunning && (
+              <div className="mx-4 mt-4"><InfoBox variant="warning" className="text-xs">Context limits for this model are unavailable ({errMsg(constraintsQuery.error)}); the context meter is hidden.</InfoBox></div>
+            )}
+            {isModelLocked && (
+              <div className="mx-4 mt-4">
+                <InfoBox variant="blue" className="text-xs">This conversation is bound to <strong>{selectedModel}</strong>. Start a new chat to use a different model.</InfoBox>
+              </div>
+            )}
 
-            {/* Messages */}
-            <MessageList messages={messages} isStreaming={isStreaming} />
+            <MessageList messages={messages} isStreaming={isStreaming} onRetry={retryLast} />
 
-            {/* Input */}
             <ChatInput
               onSend={handleSendMessage}
               onStop={stopStreaming}
-              disabled={!selectedModel}
+              disabled={inputDisabled}
               isStreaming={isStreaming}
-              placeholder={selectedModel ? 'Type a message...' : 'Select a model to start chatting'}
+              placeholder={!selectedModel ? 'Select a model to start chatting' : !modelIsRunning ? 'This model is not running' : 'Type a message…'}
               contextUsed={contextUsed}
               contextLimit={contextLimit}
             />

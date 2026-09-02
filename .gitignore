@@ -74,3 +74,4 @@ backend/.env.prod
 backend/.env
 backend/.env.*
 !backend/.env.example
+frontend/tsconfig.tsbuildinfo

@@ -16,7 +16,6 @@ interface RequestDefaultsSectionProps {
  * These parameters are applied at REQUEST TIME by the gateway, not at container startup.
  * Client-specified values always take precedence over these defaults.
  * 
- * See cortexSustainmentPlan.md for architectural details.
  */
 export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSectionProps) {
   if (!values.engine_type) return null;
@@ -156,7 +155,7 @@ export function RequestDefaultsSection({ values, onChange }: RequestDefaultsSect
           <li>Leave a field empty to send nothing and let the engine use its own default</li>
           <li>Gateway merges these into requests that don't specify values</li>
           <li>Gateway automatically translates parameter names for llama.cpp (e.g., "temperature" → "temp")</li>
-          <li>Changes take effect immediately - no container restart needed!</li>
+          <li>Saved with the model configuration; Save &amp; Apply restarts a running model so the new defaults take effect.</li>
         </ul>
       </div>
 

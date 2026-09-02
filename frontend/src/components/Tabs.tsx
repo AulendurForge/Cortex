@@ -67,7 +67,7 @@ export function Tabs({ tabs, defaultId }: { tabs: TabConfig[]; defaultId?: strin
               role="tabpanel"
               aria-labelledby={`tab-${tab.id}`}
               hidden={!isActive}
-              className="focus:outline-none animate-in fade-in slide-in-from-bottom-2 duration-500"
+              className="focus:outline-none duration-500"
             >
               {isActive && tab.content}
             </div>

@@ -2,12 +2,26 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { HostIpDisplay } from '../../../../../src/components/HostIpDisplay';
-import { cn } from '../../../../../src/lib/cn';
-import cortexLogo from '../../../../../src/assets/cortex logo white.PNG';
+import { useRouter } from 'next/navigation';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { HostIpDisplay } from '@/components/HostIpDisplay';
+import { cn } from '@/lib/cn';
+import cortexLogo from '@/assets/cortex logo white.PNG';
+import { Attribution } from '../Attribution';
+
+const CORTEX_VERSION = process.env.NEXT_PUBLIC_CORTEX_VERSION ?? '0.2.0';
+const TUTORIAL_HREF = '/guide?tab=getting-started#first-model';
 
 export default function WelcomeToCortex() {
+  const router = useRouter();
+
+  const goToTutorial = () => {
+    router.push(TUTORIAL_HREF);
+    // Next's soft navigation does not emit hashchange for a hash-only change; GettingStarted listens for it.
+    const newURL = new URL(TUTORIAL_HREF, window.location.origin).href;
+    window.dispatchEvent(new HashChangeEvent('hashchange', { oldURL: window.location.href, newURL }));
+  };
+
   return (
     <section className="space-y-6">
       {/* Hero Welcome */}
@@ -24,7 +38,7 @@ export default function WelcomeToCortex() {
         
         <div className="space-y-4 relative z-10">
           <div className="flex items-center gap-3">
-            <Badge className="bg-indigo-500/20 text-indigo-300 border-indigo-500/30 text-[10px]">BETA 0.1</Badge>
+            <Badge className="bg-indigo-500/20 text-indigo-300 border-indigo-500/30 text-[10px]">v{CORTEX_VERSION}</Badge>
             <span className="text-white/40 text-xs">•</span>
             <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="text-white/60 text-xs font-medium hover:text-white/90 hover:underline transition-colors">By Aulendur Labs</a>
           </div>
@@ -70,7 +84,7 @@ export default function WelcomeToCortex() {
           <FeatureCard 
             icon="🔐"
             title="Secure Access Control"
-            description="Create API keys with specific scopes. Track usage by user and organization. Full audit trail of every request."
+            description="Create API keys with scopes, IP allowlists and expiry dates. Every request is metered against its key, user and organization."
             color="purple"
           />
           <FeatureCard 
@@ -88,7 +102,7 @@ export default function WelcomeToCortex() {
           <FeatureCard 
             icon="🏢"
             title="Multi-Tenant Ready"
-            description="Organize users into organizations. Allocate resources and track usage per team. Scale from one user to enterprise deployments."
+            description="Organize users into organizations and programs, attribute API keys to them, and filter usage per team."
             color="rose"
           />
         </div>
@@ -125,7 +139,7 @@ export default function WelcomeToCortex() {
             />
             <InfoPoint 
               label="Resource Isolation" 
-              detail="Each model runs in its own container with dedicated GPU allocation—no interference"
+              detail="Each model runs in its own container on the GPUs you select; stopping one never touches the others"
             />
           </div>
         </Card>
@@ -137,7 +151,7 @@ export default function WelcomeToCortex() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-3">
             <div className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
-              <span>🤖</span> Model Management
+              <span aria-hidden="true">🤖</span> Model Management
             </div>
             <ul className="space-y-2 text-[12px] text-white/70">
               <CapabilityItem>Add models from HuggingFace Hub or local storage</CapabilityItem>
@@ -150,12 +164,12 @@ export default function WelcomeToCortex() {
 
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-3">
             <div className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
-              <span>🔑</span> Access Control
+              <span aria-hidden="true">🔑</span> Access Control
             </div>
             <ul className="space-y-2 text-[12px] text-white/70">
               <CapabilityItem>Create API keys with scoped permissions</CapabilityItem>
               <CapabilityItem>Assign keys to specific users and organizations</CapabilityItem>
-              <CapabilityItem>Set rate limits and usage quotas</CapabilityItem>
+              <CapabilityItem>Restrict keys to IP addresses or CIDR ranges and give them an expiry date</CapabilityItem>
               <CapabilityItem>Revoke access instantly when needed</CapabilityItem>
               <CapabilityItem>Track all API usage by key and user</CapabilityItem>
             </ul>
@@ -163,27 +177,27 @@ export default function WelcomeToCortex() {
 
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-3">
             <div className="text-[11px] font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-2">
-              <span>📊</span> Monitoring & Analytics
+              <span aria-hidden="true">📊</span> Monitoring & Analytics
             </div>
             <ul className="space-y-2 text-[12px] text-white/70">
               <CapabilityItem>Monitor GPU utilization and memory across all cards</CapabilityItem>
               <CapabilityItem>Track tokens generated, latency, and throughput</CapabilityItem>
               <CapabilityItem>View usage breakdowns by user and organization</CapabilityItem>
-              <CapabilityItem>Receive alerts when resources are constrained</CapabilityItem>
-              <CapabilityItem>Export metrics to external monitoring systems</CapabilityItem>
+              <CapabilityItem>Watch GPU, host and container metrics on the Health and System Monitor pages</CapabilityItem>
+              <CapabilityItem>Scrape the gateway&apos;s Prometheus /metrics endpoint from your own monitoring</CapabilityItem>
             </ul>
           </Card>
 
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-3">
             <div className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
-              <span>👥</span> Team Management
+              <span aria-hidden="true">👥</span> Team Management
             </div>
             <ul className="space-y-2 text-[12px] text-white/70">
               <CapabilityItem>Create organizations for different teams or projects</CapabilityItem>
               <CapabilityItem>Add users with appropriate role assignments</CapabilityItem>
               <CapabilityItem>View per-org and per-user usage statistics</CapabilityItem>
-              <CapabilityItem>Manage authentication and session security</CapabilityItem>
-              <CapabilityItem>Configure multi-tenant isolation policies</CapabilityItem>
+              <CapabilityItem>Disable or delete accounts and reset passwords</CapabilityItem>
+              <CapabilityItem>Let every user create and revoke their own keys on My API Keys</CapabilityItem>
             </ul>
           </Card>
         </div>
@@ -205,7 +219,7 @@ export default function WelcomeToCortex() {
       {/* Getting Started CTA */}
       <Card className="p-5 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-blue-500/10 border-emerald-500/20 space-y-4">
         <div className="flex items-start gap-4">
-          <div className="text-3xl">🎯</div>
+          <div className="text-3xl" aria-hidden="true">🎯</div>
           <div className="space-y-2">
             <h3 className="text-[14px] font-bold text-white">Ready to Deploy Your First Model?</h3>
             <p className="text-[12px] text-white/70 leading-relaxed">
@@ -217,7 +231,7 @@ export default function WelcomeToCortex() {
                 variant="cyan" 
                 size="sm" 
                 className="text-[10px]"
-                onClick={() => window.location.hash = 'first-model'}
+                onClick={goToTutorial}
               >
                 Start Tutorial →
               </Button>
@@ -238,9 +252,7 @@ export default function WelcomeToCortex() {
         detected and have available VRAM. Most deployment issues stem from resource constraints or driver problems.
       </InfoBox>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Getting Started Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Getting Started Guide" />
     </section>
   );
 }
@@ -257,7 +269,7 @@ function FeatureCard({ icon, title, description, color }: { icon: string; title:
   };
   return (
     <Card className={cn("p-4 bg-white/[0.02] border-white/5 group transition-all duration-300", colors[color])}>
-      <div className="text-2xl mb-3 group-hover:scale-110 transition-transform">{icon}</div>
+      <div className="text-2xl mb-3 group-hover:scale-110 transition-transform" aria-hidden="true">{icon}</div>
       <div className="text-[12px] font-bold text-white uppercase tracking-wider mb-1">{title}</div>
       <div className="text-[11px] text-white/60 leading-relaxed">{description}</div>
     </Card>
@@ -280,7 +292,7 @@ function FlowBlock({ label, detail, color }: { label: string; detail: string; co
 }
 
 function Arrow() {
-  return <span className="text-white/30 text-lg">→</span>;
+  return <span className="text-white/30 text-lg" aria-hidden="true">→</span>;
 }
 
 function InfoPoint({ label, detail }: { label: string; detail: string }) {
@@ -295,7 +307,7 @@ function InfoPoint({ label, detail }: { label: string; detail: string }) {
 function CapabilityItem({ children }: { children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2">
-      <span className="text-emerald-400 mt-0.5">✓</span>
+      <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
       <span>{children}</span>
     </li>
   );
@@ -305,7 +317,7 @@ function NavCard({ href, icon, title, description }: { href: string; icon: strin
   return (
     <Link href={href}>
       <Card className="p-3 bg-white/[0.02] border-white/5 hover:border-white/20 hover:bg-white/[0.04] transition-all duration-300 h-full">
-        <div className="text-xl mb-1">{icon}</div>
+        <div className="text-xl mb-1" aria-hidden="true">{icon}</div>
         <div className="text-[10px] font-bold text-white uppercase tracking-wider">{title}</div>
         <div className="text-[9px] text-white/40 mt-0.5">{description}</div>
       </Card>

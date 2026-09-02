@@ -21,6 +21,10 @@ export const CreateKeyResponseSchema = z.object({ id: z.number(), prefix: z.stri
 export const UsageItemSchema = z.object({
   id: z.number(),
   key_id: z.number().nullable(),
+  user_id: z.number().nullable().optional(),
+  org_id: z.number().nullable().optional(),
+  username: z.string().nullable().optional(),
+  org_name: z.string().nullable().optional(),
   model_name: z.string(),
   task: z.string(),
   prompt_tokens: z.number(),
@@ -51,8 +55,9 @@ export const UsageAggItemSchema = z.object({
 export const UsageAggListSchema = z.array(UsageAggItemSchema);
 
 // Latency summary
-export const LatencySummarySchema = z.object({ p50_ms: z.number(), p95_ms: z.number(), avg_ms: z.number() });
-export const TtftSummarySchema = z.object({ p50_s: z.number(), p95_s: z.number() });
+export const LatencySummarySchema = z.object({ p50_ms: z.number(), p95_ms: z.number(), avg_ms: z.number(), samples: z.number().optional() });
+// null = no streamed requests in the window (Prometheus has no samples)
+export const TtftSummarySchema = z.object({ p50_s: z.number().nullable(), p95_s: z.number().nullable(), samples: z.number().optional() });
 
 
 // System monitoring
@@ -60,10 +65,12 @@ export const ThroughputSummarySchema = z.object({
   req_per_sec: z.number(),
   prompt_tokens_per_sec: z.number(),
   generation_tokens_per_sec: z.number(),
-  latency_p50_ms: z.number(),
-  latency_p95_ms: z.number(),
-  ttft_p50_ms: z.number(),
-  ttft_p95_ms: z.number(),
+  latency_p50_ms: z.number().nullable(),
+  latency_p95_ms: z.number().nullable(),
+  ttft_p50_ms: z.number().nullable(),
+  ttft_p95_ms: z.number().nullable(),
+  scope: z.string().optional(),
+  units: z.record(z.string()).optional(),
 });
 
 export const GpuMetricsItemSchema = z.object({
@@ -135,6 +142,13 @@ export const ModelMetricsSchema = z.object({
   model_id: z.number(),
   model_name: z.string(),
   served_name: z.string(),
+  engine_type: z.string().optional(),
+  engine_metrics: z.string().nullable().optional(),
+  state_reason: z.string().nullable().optional(),
+  prompt_tokens_per_sec: z.number().nullable().optional(),
+  generation_tokens_per_sec: z.number().nullable().optional(),
+  time_to_first_token_avg_ms: z.number().nullable().optional(),
+  request_latency_avg_ms: z.number().nullable().optional(),
   num_requests_running: z.number().nullable().optional(),
   num_requests_waiting: z.number().nullable().optional(),
   num_requests_swapped: z.number().nullable().optional(),
@@ -400,3 +414,30 @@ export const GpuInfoSchema = z.object({
 });
 export const GpuInfoListSchema = z.array(GpuInfoSchema);
 export type GpuInfo = z.infer<typeof GpuInfoSchema>;
+
+
+// Upstream health snapshot (GET /admin/upstreams)
+export const HealthMetaSchema = z.object({
+  served_names: z.array(z.string()).optional(),
+  category: z.string().optional(),
+  models: z.array(z.string()).optional(),
+  last_ok_ts: z.number().optional(),
+  last_fail_ts: z.number().optional(),
+  consecutive_fails: z.number().optional(),
+  last_error: z.string().nullable().optional(),
+  last_status_code: z.number().nullable().optional(),
+  last_latency_ms: z.number().optional(),
+  history: z.array(z.object({ ts: z.number(), ok: z.boolean(), latency_ms: z.number(), status_code: z.number().nullable() })).optional(),
+  breaker: z.object({ state: z.string(), cooldown_remaining_sec: z.number(), consecutive_fails: z.number() }).optional(),
+  tokens_per_sec: z.object({ prompt: z.number().nullable(), generation: z.number().nullable() }).nullable().optional(),
+}).passthrough();
+export const HealthSnapshotSchema = z.object({
+  health: z.record(z.object({ ok: z.boolean(), ts: z.number() })).default({}),
+  meta: z.record(HealthMetaSchema).default({}),
+  circuit_breakers: z.record(z.object({ fail: z.number(), open_until: z.number() })).default({}),
+  registry: z.record(z.any()).optional(),
+  now: z.number().optional(),
+  health_ttl_sec: z.number().optional(),
+}).passthrough();
+export type HealthSnapshot = z.infer<typeof HealthSnapshotSchema>;
+export type HealthMeta = z.infer<typeof HealthMetaSchema>;

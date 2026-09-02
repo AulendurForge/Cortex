@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useHostIP } from '../hooks/useHostIP';
+import { getGatewayBaseUrl } from '../lib/api-clients';
 import { useToast } from '../providers/ToastProvider';
 import { Button, Card, Badge } from './UI';
 import { cn } from '../lib/cn';
@@ -18,19 +20,15 @@ export function HostIpDisplay({
   showCopy?: boolean;
   className?: string;
 }) {
-  const [hostIP, setHostIP] = useState<string>('');
+  const hostIP = useHostIP();
   const { addToast } = useToast();
-
+  // the gateway address as this browser reaches it (honours NEXT_PUBLIC_GATEWAY_URL and proxies)
+  const [gateway, setGateway] = useState<{ base: string; hostPort: string; uiPort: string }>({ base: '', hostPort: '', uiPort: '' });
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      // Use environment variable if available, otherwise fall back to browser hostname
-      const envHostIP = process.env.NEXT_PUBLIC_HOST_IP;
-      if (envHostIP && envHostIP !== 'localhost') {
-        setHostIP(envHostIP);
-      } else {
-        setHostIP(window.location.hostname);
-      }
-    }
+    const base = getGatewayBaseUrl();
+    let hostPort = '';
+    try { const u = new URL(base); hostPort = u.port ? `${u.hostname}:${u.port}` : u.host; } catch { hostPort = base; }
+    setGateway({ base, hostPort, uiPort: window.location.port || (window.location.protocol === 'https:' ? '443' : '80') });
   }, []);
 
   const copyToClipboard = async (text: string, label: string) => {
@@ -44,7 +42,8 @@ export function HostIpDisplay({
 
   const copyIP = () => copyToClipboard(hostIP, 'IP address');
 
-  if (!hostIP) return null;
+  if (!hostIP || !gateway.base) return null;
+  const apiBase = `${gateway.base}/v1`;
 
   if (variant === 'banner') {
     return (
@@ -58,17 +57,17 @@ export function HostIpDisplay({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
           <div className="space-y-4">
             <div>
-              <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 mb-2">Host Network Mode</Badge>
+              <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 mb-2">Gateway</Badge>
               <h3 className="text-sm font-bold text-white uppercase tracking-wider">Cortex API Endpoints</h3>
             </div>
             
             <div className="flex flex-wrap gap-6">
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">LAN / External</div>
+                <div className="text-[9px] uppercase font-bold text-white/50 tracking-[0.2em]">LAN / External</div>
                 <div className="flex items-center gap-2">
-                  <code className="text-lg font-mono text-emerald-400 font-black tracking-tight">{hostIP}:8084</code>
+                  <code className="text-lg font-mono text-emerald-400 font-black tracking-tight">{gateway.hostPort}</code>
                   {showCopy && (
-                    <button onClick={() => copyToClipboard(`http://${hostIP}:8084/v1`, 'LAN URL')} className="p-1 hover:bg-emerald-500/10 rounded-md transition-colors text-emerald-500/50 hover:text-emerald-400">
+                    <button type="button" aria-label="Copy API base URL" onClick={() => copyToClipboard(apiBase, 'API base URL')} className="p-1 hover:bg-emerald-500/10 rounded-md transition-colors text-emerald-500/60 hover:text-emerald-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                     </button>
                   )}
@@ -76,11 +75,11 @@ export function HostIpDisplay({
               </div>
 
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Docker Containers</div>
+                <div className="text-[9px] uppercase font-bold text-white/50 tracking-[0.2em]">Docker Containers</div>
                 <div className="flex items-center gap-2">
-                  <code className="text-sm font-mono text-cyan-400 font-bold tracking-tight">host.docker.internal:8084</code>
+                  <code className="text-sm font-mono text-cyan-400 font-bold tracking-tight">host.docker.internal:{gateway.hostPort.split(':')[1] ?? '8084'}</code>
                   {showCopy && (
-                    <button onClick={() => copyToClipboard('http://host.docker.internal:8084/v1', 'Docker URL')} className="p-1 hover:bg-cyan-500/10 rounded-md transition-colors text-cyan-500/50 hover:text-cyan-400">
+                    <button type="button" aria-label="Copy Docker URL" onClick={() => copyToClipboard(`http://host.docker.internal:${gateway.hostPort.split(':')[1] ?? '8084'}/v1`, 'Docker URL')} className="p-1 hover:bg-cyan-500/10 rounded-md transition-colors text-cyan-500/60 hover:text-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                     </button>
                   )}
@@ -88,8 +87,8 @@ export function HostIpDisplay({
               </div>
 
               <div className="space-y-1">
-                <div className="text-[9px] uppercase font-bold text-white/30 tracking-[0.2em]">Admin UI Port</div>
-                <code className="text-lg font-mono text-purple-400 font-black tracking-tight">3001</code>
+                <div className="text-[9px] uppercase font-bold text-white/50 tracking-[0.2em]">Admin UI port</div>
+                <code className="text-lg font-mono text-purple-400 font-black tracking-tight">{gateway.uiPort}</code>
               </div>
             </div>
           </div>
@@ -100,7 +99,7 @@ export function HostIpDisplay({
                 variant="default" 
                 size="sm"
                 className="font-bold uppercase tracking-widest text-[9px] bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10 hover:text-emerald-300"
-                onClick={() => copyToClipboard(`http://${hostIP}:8084/v1`, 'API Base URL')}
+                onClick={() => copyToClipboard(apiBase, 'API base URL')}
               >
                 Copy API Base URL
               </Button>
@@ -108,7 +107,7 @@ export function HostIpDisplay({
                 variant="default" 
                 size="sm"
                 className="font-bold uppercase tracking-widest text-[9px] bg-cyan-500/5 border-cyan-500/20 hover:bg-cyan-500/10 hover:text-cyan-300"
-                onClick={() => copyToClipboard('http://host.docker.internal:8084/v1', 'Docker URL')}
+                onClick={() => copyToClipboard(`http://host.docker.internal:${gateway.hostPort.split(':')[1] ?? '8084'}/v1`, 'Docker URL')}
               >
                 Copy Docker URL
               </Button>
@@ -138,10 +137,11 @@ export function HostIpDisplay({
           </div>
           {showCopy && (
             <button 
+              type="button"
               onClick={copyIP}
               className="text-emerald-400 hover:text-emerald-300 transition-colors"
               title="Copy IP address"
-              aria-label="Copy IP"
+              aria-label="Copy IP address"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -159,10 +159,11 @@ export function HostIpDisplay({
       <code className="font-mono text-emerald-400 font-medium">{hostIP}</code>
       {showCopy && (
         <button 
+          type="button"
           onClick={copyIP}
           className="text-emerald-400 hover:text-emerald-300 transition-colors"
           title="Copy IP address"
-          aria-label="Copy IP"
+          aria-label="Copy IP address"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -173,24 +174,4 @@ export function HostIpDisplay({
   );
 }
 
-/**
- * Hook to get the host IP programmatically
- */
-export function useHostIP(): string {
-  const [hostIP, setHostIP] = useState<string>('');
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      // Use environment variable if available, otherwise fall back to browser hostname
-      const envHostIP = process.env.NEXT_PUBLIC_HOST_IP;
-      if (envHostIP && envHostIP !== 'localhost') {
-        setHostIP(envHostIP);
-      } else {
-        setHostIP(window.location.hostname);
-      }
-    }
-  }, []);
-
-  return hostIP;
-}
-
+export { useHostIP } from '../hooks/useHostIP';

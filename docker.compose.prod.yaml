@@ -144,6 +144,9 @@ services:
     image: cortex-frontend:${CORTEX_VERSION:-0.2.0}
     environment:
       NODE_ENV: production
+      # Gateway address for the browser, read at request time: empty = <this host>:8084 (LAN/dev),
+      # "/" = same origin (behind the TLS reverse proxy), or a full URL.
+      CORTEX_GATEWAY_URL: ${CORTEX_GATEWAY_URL:-}
       NEXT_PUBLIC_HOST_IP: ${HOST_IP:-}
     # Loopback by default: the reverse proxy is the only public listener. Set FRONTEND_BIND=0.0.0.0
     # to serve the UI directly on the LAN without TLS (not recommended).

@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # Infra images (postgres, redis, prometheus, ...) as pinned in versions.env; passed by compose for bundle exports
     CORTEX_INFRA_IMAGES: str = ""
     CORTEX_VERSION: str = "dev"
+    # Peers allowed to set X-Forwarded-For / X-Real-IP (IPs or CIDRs, comma-separated). Empty = never trust
+    # forwarded headers, so an API-key IP allowlist cannot be bypassed by spoofing them.
+    TRUSTED_PROXY_IPS: str = ""
     # Host paths (used when creating vLLM containers via Docker SDK)
     CORTEX_MODELS_DIR_HOST: str | None = None
     HF_CACHE_DIR_HOST: str | None = None

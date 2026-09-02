@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { cn } from '../../../../src/lib/cn';
+import { useSearchParams } from 'next/navigation';
+import { cn } from '@/lib/cn';
 
 // Sub-section imports
 import WelcomeToCortex from './gettingStarted/WelcomeToCortex';
@@ -24,13 +25,24 @@ const SUB_TABS: SubTab[] = [
 export default function GettingStarted() {
   const [activeTab, setActiveTab] = useState('welcome');
 
-  // Sync with URL hash for deep linking
+  const searchParams = useSearchParams();
+
+  // Sync with the URL hash for deep linking: on mount, whenever the query changes and on
+  // hashchange. Next's soft navigation does not emit hashchange for a hash-only change, so
+  // in-guide links dispatch one themselves (see WelcomeToCortex).
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '');
-    if (hash && SUB_TABS.find(t => t.id === hash)) {
-      setActiveTab(hash);
-    }
-  }, []);
+    const sync = (e?: HashChangeEvent) => {
+      let hash = window.location.hash;
+      if (e?.newURL) {
+        try { hash = new URL(e.newURL).hash; } catch { /* keep the current hash */ }
+      }
+      hash = hash.replace('#', '');
+      if (hash && SUB_TABS.find((t) => t.id === hash)) setActiveTab(hash);
+    };
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, [searchParams]);
 
   const handleTabChange = useCallback((tabId: string) => {
     setActiveTab(tabId);
@@ -40,7 +52,7 @@ export default function GettingStarted() {
   const activeContent = SUB_TABS.find(t => t.id === activeTab)?.content;
 
   return (
-    <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-700">
+    <section className="space-y-4 duration-700">
       <header className="space-y-2 text-center md:text-left">
         <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">Getting Started</h1>
         <p className="text-white/60 text-sm leading-relaxed max-w-3xl">
@@ -60,6 +72,7 @@ export default function GettingStarted() {
           return (
             <button
               key={tab.id}
+              id={`tab-${tab.id}`}
               role="tab"
               aria-selected={isActive}
               aria-controls={`panel-${tab.id}`}
@@ -72,7 +85,7 @@ export default function GettingStarted() {
               )}
               type="button"
             >
-              <span className="text-sm">{tab.icon}</span>
+              <span className="text-sm" aria-hidden="true">{tab.icon}</span>
               <span className="hidden sm:inline">{tab.label}</span>
             </button>
           );
@@ -84,7 +97,7 @@ export default function GettingStarted() {
         id={`panel-${activeTab}`}
         role="tabpanel"
         aria-labelledby={`tab-${activeTab}`}
-        className="animate-in fade-in slide-in-from-bottom-1 duration-300"
+        className="slide-in-from-bottom-1 duration-300"
       >
         {activeContent}
       </div>

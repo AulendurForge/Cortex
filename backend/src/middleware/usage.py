@@ -23,6 +23,8 @@ async def record_usage(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     req_id: str | None = None,
+    status_code: int | None = None,
+    end_ns: int | None = None,
 ):
     """Record a usage entry for an API request.
     
@@ -48,7 +50,7 @@ async def record_usage(
     if SessionLocal is None:
         return
     try:
-        elapsed_ms = int((time.time_ns() - start_ns) / 1_000_000)
+        elapsed_ms = int(((end_ns or time.time_ns()) - start_ns) / 1_000_000)
     except Exception:
         elapsed_ms = 0
     try:
@@ -63,7 +65,7 @@ async def record_usage(
                 completion_tokens=int(completion_tokens or 0),
                 total_tokens=int(total_tokens or 0),
                 latency_ms=elapsed_ms,
-                status_code=int(getattr(response, "status_code", 0)),
+                status_code=int(status_code if status_code is not None else getattr(response, "status_code", 0)),
                 req_id=(req_id or request.headers.get("x-request-id", "")),
             )
             session.add(rec)

@@ -188,7 +188,7 @@ describe('buildInitialValues', () => {
 describe('engine field lists', () => {
   it('derive the exclusive field sets from the static spec', () => {
     expect(VLLM_ONLY_FIELDS).toContain('gpu_memory_utilization');
-    expect(VLLM_ONLY_FIELDS).toContain('hf_offline');
+    expect(VLLM_ONLY_FIELDS).not.toContain('hf_offline'); // dead control removed: HF offline follows local_path
     expect(VLLM_ONLY_FIELDS).not.toContain('chat_template');
     expect(LLAMACPP_ONLY_FIELDS).toContain('flash_attn');
     expect(LLAMACPP_ONLY_FIELDS).toContain('load_mode');

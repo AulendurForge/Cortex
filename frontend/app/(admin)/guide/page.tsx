@@ -1,7 +1,7 @@
 'use client';
 
-import { PageHeader } from '../../../src/components/UI';
-import { Tabs } from '../../../src/components/Tabs';
+import { PageHeader } from '@/components/UI';
+import { Tabs } from '@/components/Tabs';
 import { Suspense } from 'react';
 
 import GettingStarted from './sections/GettingStarted';

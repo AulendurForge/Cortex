@@ -12,18 +12,21 @@ cd Cortex
 # 2. Start everything
 make quick-start
 
-# 3. Access at the IP shown in output
+# 3. Enter an admin username and password when prompted (asked once, stored in .env)
+
+# 4. Sign in at the IP shown in the output
 # Example: http://192.168.1.50:3001/login
-# Username: admin
-# Password: admin
 ```
+
+There is no default account: the credentials you type become the admin login. Change or reset them
+at any time with `make setup-admin` (`LOGOUT_ALL=1 make setup-admin` also signs every session out).
 
 **That's it!** The system automatically:
 - ✅ Detects your host machine's IP address
 - ✅ Configures CORS for network access
 - ✅ Enables monitoring on Linux (host + GPU metrics)
 - ✅ Sets up the database
-- ✅ Creates admin user
+- ✅ Creates the admin account with the credentials you entered
 - ✅ Starts all services
 
 ---
@@ -72,13 +75,14 @@ The frontend automatically detects the gateway URL based on which IP the user ac
 ## 📋 Pre-Installation Checklist
 
 ### Required (Must Have)
-- [ ] Docker installed (v20.10+)
+- [ ] Ubuntu 22.04 / 24.04 or RHEL 9 (x86_64)
+- [ ] Docker Engine installed (v24+)
 - [ ] Docker Compose installed (v2.0+)
 - [ ] At least 8GB RAM available
 - [ ] At least 20GB free disk space
 
 ### Optional (For Enhanced Features)
-- [ ] NVIDIA GPU + drivers (for GPU model serving)
+- [ ] NVIDIA GPU + driver 580+ for the default vLLM image, 570+ for llama.cpp (see `docs/operations/UPDATE_NVIDIA_DRIVERS.md`)
 - [ ] NVIDIA Container Toolkit (for GPU access)
 - [ ] Static IP on host machine (recommended for production)
 
@@ -119,15 +123,13 @@ Cortex/
 - Change database credentials
 - Add environment-specific settings
 
-**Example - Change Ports:**
-```yaml
-# docker.compose.dev.yaml
-gateway:
-  ports: ["8085:8084"]  # Changed from 8084 to 8085
-
-frontend:
-  ports: ["3002:3001"]  # Changed from 3001 to 3002
+**Example - Change the UI port:**
+```bash
+# .env (read by make and docker compose)
+FRONTEND_PORT=3002
 ```
+
+The gateway uses host networking and always listens on 8084; only the admin UI port is configurable.
 
 Then restart:
 ```bash
@@ -216,6 +218,7 @@ make quick-start
 
 # Open that URL in your browser
 # Use the IP shown, NOT localhost
+# Forgot the password? Reset it with: make setup-admin
 ```
 
 ### Step 6: Create API Key
@@ -226,7 +229,7 @@ make login      # Enter the admin credentials (make setup-admin to change them)
 make create-key # Copy the token
 
 # Option 2: Via Admin UI
-# Login → API Keys → Create New Key
+# Login → All API Keys → New key
 ```
 
 ### Step 7: Test API
@@ -576,7 +579,7 @@ curl -X POST http://192.168.1.50:8084/admin/users \
 
 ```bash
 # Via Admin UI
-# Login → API Keys → Create Key → Assign to User
+# Login → All API Keys → New key → assign to a user and/or organization
 
 # Save the token immediately (shown only once!)
 ```
@@ -585,7 +588,7 @@ curl -X POST http://192.168.1.50:8084/admin/users \
 
 ```bash
 # Via Admin UI
-# Login → Models → Create Model
+# Login → Models → Add Model
 # - Choose engine (vLLM or llama.cpp)
 # - Configure parameters
 # - Click "Start"
@@ -789,7 +792,7 @@ make quick-start
 - ✅ Detects your IP
 - ✅ Configures CORS
 - ✅ Sets up networking
-- ✅ Creates admin user
+- ✅ Creates the admin account with the credentials you entered
 - ✅ Starts all services
 
 **Access at the IP shown in the output. That's it!** 🎉
@@ -798,7 +801,7 @@ make quick-start
 
 ## 🔐 Security Best Practices
 
-1. **Change default password** immediately after quick-start
+1. **Use a strong admin password** (there is no default one; rotate it with `make setup-admin`)
 2. **Use strong API keys** for production
 3. **Enable firewall** rules
 4. **Set up TLS** for production (nginx/traefik)

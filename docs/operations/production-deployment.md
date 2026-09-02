@@ -54,6 +54,10 @@ are stamped at the baseline first). `make migrate` re-runs them on demand.
 
 ## 4. TLS reverse proxy (Caddy)
 
+With the proxy in front, the browser must call the API on the **same origin** as the UI: set
+`CORTEX_GATEWAY_URL=/` in `.env` (the UI reads it at request time, no rebuild needed). Without it
+the UI would call `https://<host>:8084`, which the proxy does not serve.
+
 Serve UI and API from **one origin** so the admin session cookie is first-party and CORS is
 trivial. Caddy obtains and renews certificates automatically (internal CA or ACME).
 

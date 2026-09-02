@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../src/components/UI';
-import { cn } from '../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from './Attribution';
 
 export default function ChatPlayground() {
   return (
-    <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-700">
+    <section className="space-y-6 duration-700">
       <header className="space-y-2 text-center md:text-left">
         <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">Chat Playground</h1>
         <p className="text-white/60 text-sm leading-relaxed max-w-3xl">
@@ -41,7 +42,7 @@ export default function ChatPlayground() {
             <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">At a Glance</div>
             <div className="grid grid-cols-2 gap-2">
               <FeatureItem icon="💬" label="Interactive Chat" desc="Real-time responses" />
-              <FeatureItem icon="📊" label="Live Metrics" desc="tok/s, TTFT, tokens" />
+              <FeatureItem icon="📊" label="Live Metrics" desc="tok/s and TTFT" />
               <FeatureItem icon="💾" label="Auto-Save" desc="Cross-device history" />
               <FeatureItem icon="🎯" label="Context Tracking" desc="Usage visualization" />
             </div>
@@ -56,7 +57,7 @@ export default function ChatPlayground() {
           <Card className="p-4 bg-white/[0.02] border-white/5 lg:col-span-2 space-y-4">
             <p className="text-[12px] text-white/70 leading-relaxed">
               Before using the Chat Playground, ensure you have at least one model running. 
-              The playground only shows <strong className="text-white">healthy, active models</strong>.
+              The picker lists <strong className="text-white">running chat models</strong>; embedding models are not offered.
             </p>
             
             <div className="space-y-2">
@@ -68,7 +69,7 @@ export default function ChatPlayground() {
                 <StepItem num={2}>
                   Select a running model from the dropdown menu
                   <div className="mt-1 text-white/50 text-[10px]">
-                    Only models with "Running" status and passing health checks appear here
+                    Only models in the running state appear here (embedding models are excluded)
                   </div>
                 </StepItem>
                 <StepItem num={3}>
@@ -129,11 +130,7 @@ export default function ChatPlayground() {
               />
               <InterfaceItem 
                 label="Delete Options" 
-                desc="Remove individual chats (X icon) or clear all history"
-              />
-              <InterfaceItem 
-                label="Refresh Button" 
-                desc="Reload the chat list if sessions were created from another device"
+                desc="Hover a chat and click the trash icon to delete it, or use 'Clear all chats' at the bottom"
               />
             </div>
           </Card>
@@ -151,7 +148,7 @@ export default function ChatPlayground() {
               />
               <InterfaceItem 
                 label="Performance Bar" 
-                desc="Real-time metrics: tokens/second, time-to-first-token, total tokens"
+                desc="Shown while streaming: tokens per second and time to first token"
               />
               <InterfaceItem 
                 label="Context Indicator" 
@@ -189,11 +186,11 @@ export default function ChatPlayground() {
               color="cyan"
             />
             <MetricCard 
-              metric="Tokens"
-              title="Total Tokens"
-              description="Combined count of input (prompt) and output (response) tokens."
-              goodRange="Varies"
-              notes="Watch this vs. context limit to avoid truncation"
+              metric="Context"
+              title="Context Used"
+              description="Estimated tokens in the conversation versus the model's limit, shown as the bar above the input."
+              goodRange="Under 80%"
+              notes="Teal up to 80%, amber above 80%, red once the limit is exceeded"
               color="purple"
             />
           </div>
@@ -219,15 +216,15 @@ export default function ChatPlayground() {
               <div className="text-[10px] uppercase font-bold text-white/50 tracking-wider">What Happens at the Limit?</div>
               <ul className="space-y-2 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-amber-400 mt-0.5">⚠</span>
-                  <span>Older messages may be "forgotten" or truncated</span>
+                  <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
+                  <span>The full conversation is sent on every turn—nothing is trimmed—so a request past the limit fails</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-amber-400 mt-0.5">⚠</span>
-                  <span>Responses may become less coherent or relevant</span>
+                  <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
+                  <span>Every turn re-processes the whole history, so long chats get slower</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400 mt-0.5">✓</span>
+                  <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                   <span>Start a <strong>New Chat</strong> to reset the context</span>
                 </li>
               </ul>
@@ -240,24 +237,24 @@ export default function ChatPlayground() {
               <div className="flex items-center gap-3">
                 <div className="w-12 h-2 rounded bg-teal-500/80"></div>
                 <div className="text-white/70">
-                  <strong className="text-teal-300">0-70%</strong> — Plenty of room
+                  <strong className="text-teal-300">0-80%</strong> — Plenty of room
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-12 h-2 rounded bg-amber-500/80"></div>
                 <div className="text-white/70">
-                  <strong className="text-amber-300">70-90%</strong> — Getting full
+                  <strong className="text-amber-300">80-100%</strong> — Getting full
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-12 h-2 rounded bg-red-500/80"></div>
                 <div className="text-white/70">
-                  <strong className="text-red-300">90-100%</strong> — Near limit
+                  <strong className="text-red-300">Over 100%</strong> — Over the limit
                 </div>
               </div>
             </div>
             <div className="text-[10px] text-white/50 mt-2">
-              When the bar turns red, consider starting a new chat session.
+              When the bar turns red the next request exceeds the model&apos;s limit—start a new chat.
             </div>
           </Card>
         </div>
@@ -275,19 +272,19 @@ export default function ChatPlayground() {
               </p>
               <ul className="space-y-2 text-[11px] text-white/70">
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Access your chats from any computer</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>History persists across browser sessions</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Only you can see your conversations</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span>Administrators can see usage statistics (not content)</span>
                 </li>
               </ul>
@@ -298,11 +295,11 @@ export default function ChatPlayground() {
               <div className="space-y-2 text-[11px] text-white/70">
                 <div className="p-2 bg-white/5 rounded-lg border border-white/10">
                   <strong className="text-white">Delete Single Chat:</strong>
-                  <div className="text-white/50 mt-1">Hover over a chat in the sidebar and click the X icon</div>
+                  <div className="text-white/50 mt-1">Hover over a chat in the sidebar and click the trash icon</div>
                 </div>
                 <div className="p-2 bg-white/5 rounded-lg border border-white/10">
                   <strong className="text-white">Clear All History:</strong>
-                  <div className="text-white/50 mt-1">Click "Clear All" at the bottom of the sidebar (requires confirmation)</div>
+                  <div className="text-white/50 mt-1">Click "Clear all chats" at the bottom of the sidebar, then click it again within 3 seconds to confirm</div>
                 </div>
                 <div className="p-2 bg-white/5 rounded-lg border border-white/10">
                   <strong className="text-white">Auto-Naming:</strong>
@@ -322,23 +319,23 @@ export default function ChatPlayground() {
             <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">✓ Recommended</div>
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Test models right after deployment to verify they're working</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Use specific prompts to test expected use cases</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Check performance metrics to establish baselines</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Start new chats when switching topics for cleaner context</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400 mt-0.5">✓</span>
+                <span className="text-emerald-400 mt-0.5" aria-hidden="true">✓</span>
                 <span>Compare different models with the same prompt</span>
               </li>
             </ul>
@@ -348,23 +345,31 @@ export default function ChatPlayground() {
             <div className="text-[10px] uppercase font-bold text-amber-300 tracking-wider">⚠ Keep in Mind</div>
             <ul className="space-y-2 text-[11px] text-white/70">
               <li className="flex items-start gap-2">
-                <span className="text-amber-400 mt-0.5">⚠</span>
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
                 <span>Chat Playground is for testing—not production workloads</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400 mt-0.5">⚠</span>
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
                 <span>Model selection locks after first message to preserve context</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400 mt-0.5">⚠</span>
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
                 <span>Very long conversations may hit context limits</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400 mt-0.5">⚠</span>
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
+                <span>There are no system-prompt or temperature controls; sampling comes from the model&apos;s request defaults</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
+                <span>A turn you stop or that fails stays in the transcript but is not sent back to the model; use Retry to resend the last prompt</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
                 <span>If model is reconfigured, existing chats may behave differently</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400 mt-0.5">⚠</span>
+                <span className="text-amber-400 mt-0.5" aria-hidden="true">⚠</span>
                 <span>Usage is logged—admins can see you're using the playground</span>
               </li>
             </ul>
@@ -378,11 +383,11 @@ export default function ChatPlayground() {
         <div className="space-y-3">
           <TroubleshootItem 
             issue="No models appear in the dropdown"
-            solution="Ensure you have at least one model started. Go to Models page and verify the status shows 'Running' with a green health indicator."
+            solution="Ensure you have at least one generate (chat) model started. Go to the Models page and verify its state is running (green badge)."
           />
           <TroubleshootItem 
-            issue="Model shows 'No models running' intermittently"
-            solution="This can happen during health check cycles. Wait a few seconds and refresh the page. If persistent, check the model's health on the Models page."
+            issue="'Only embedding models are running'"
+            solution="The picker excludes embedding models. Start a generate (chat) model on the Models page."
           />
           <TroubleshootItem 
             issue="Response is very slow"
@@ -390,7 +395,7 @@ export default function ChatPlayground() {
           />
           <TroubleshootItem 
             issue="Chat history doesn't appear"
-            solution="Ensure you're logged in. Chat history is user-specific. Try clicking the refresh button in the sidebar."
+            solution="Ensure you're logged in—chat history is per user. If the list could not be loaded, the sidebar shows the error; reload the page."
           />
           <TroubleshootItem 
             issue="Context bar is full but conversation is short"
@@ -432,9 +437,7 @@ export default function ChatPlayground() {
         </div>
       </Card>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Chat Playground Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Chat Playground Guide" />
     </section>
   );
 }
@@ -443,7 +446,7 @@ export default function ChatPlayground() {
 function FeatureItem({ icon, label, desc }: { icon: string; label: string; desc: string }) {
   return (
     <div className="flex items-center gap-2 p-2 bg-white/5 rounded-lg border border-white/5">
-      <span className="text-lg">{icon}</span>
+      <span className="text-lg" aria-hidden="true">{icon}</span>
       <div>
         <div className="text-[10px] font-bold text-white">{label}</div>
         <div className="text-[9px] text-white/50">{desc}</div>
@@ -484,7 +487,7 @@ function PrereqItem({ label, required, desc }: { label: string; required: boolea
 function InterfaceItem({ label, desc }: { label: string; desc: string }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="text-cyan-400 mt-0.5">•</span>
+      <span className="text-cyan-400 mt-0.5" aria-hidden="true">•</span>
       <div>
         <strong className="text-white">{label}</strong>
         <div className="text-white/50">{desc}</div>
@@ -530,7 +533,7 @@ function TroubleshootItem({ issue, solution }: { issue: string; solution: string
   return (
     <Card className="p-3 bg-white/[0.02] border-white/5">
       <div className="flex items-start gap-3">
-        <span className="text-amber-400 text-sm mt-0.5">?</span>
+        <span className="text-amber-400 text-sm mt-0.5" aria-hidden="true">?</span>
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-white">{issue}</div>
           <div className="text-[11px] text-white/60 leading-relaxed">{solution}</div>

@@ -48,6 +48,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tracked `backend/.env`, `.env.linux`, `.env.windows` removed from git (they were committed with a private
   address); docs no longer quote `admin/admin`.
 
+### Frontend audit (2026-09-02) — see docs/FRONTEND_AUDIT.md
+- **Usage is now accurate**: streamed chats are metered at stream end with the engine's token counts; usage rows
+  carry the key owner or signed-in user and their organization; every filter (time, model, task, status, key,
+  user, org) applies to KPIs, charts and the journal; 7-day/30-day windows work (`bucket=day`, zero-filled);
+  time-to-first-token comes from Prometheus (shows "—" without samples); CSV export includes user/org.
+- **Monitoring numbers mean what they say**: throughput and latency tiles count `/v1` inference routes only and
+  both engine families; Health shows tokens/s per served model, breaker state, probe staleness and errors, and
+  "Probe now" really probes managed models; System Monitor scrapes vLLM and llama.cpp metrics through the
+  gateway, shows GPU name/capacity under DCGM, ranges up to 24 h, units everywhere, no fake "Live" badge.
+- **Playground**: embedding models are no longer offered; the running list follows the supervisor; real
+  token counts and engine-reported tok/s; failed and cancelled turns are never replayed or persisted; sessions
+  are created on the first message with the correct engine; switching chats aborts the stream; retry button.
+- **Models**: Save & Apply reports restart failures honestly; renaming a running model no longer rewrites its
+  served name; Archive only for stopped/failed models (backend enforced); dead `HF offline` control removed;
+  calculator says "capacity unknown" instead of "FITS" without GPU data.
+- **Keys / users / orgs**: Cancel no longer creates a key (Button defaults to `type="button"`); non-admins get a
+  working "My API Keys" page (`/admin/me/keys` list/create/revoke); CIDR allowlists; `X-Forwarded-For` only
+  from `TRUSTED_PROXY_IPS`; user validation (roles, 8-char passwords), org unassign, status editing, self-delete
+  and last-admin guards, inline errors; orgs delete no longer calls a nonexistent route.
+- **Auth/navigation**: single session probe with an auth gate (no 401 storms), `/login?next=` redirect, role
+  never read from localStorage, accessible login form, mobile navigation drawer, "Reached via" host box,
+  gateway URL from runtime config (`CORTEX_GATEWAY_URL`, `/` behind the TLS proxy).
+- **Foundation**: `ApiError` + `errMsg`, shared formatters, `@/` alias, ESLint in `npm run lint`/CI,
+  `output: 'standalone'` with security headers and slim production images, `.dockerignore`, dead code and
+  3 MB of unused images removed, Modal focus fix, hydration-safe Accordion, corrected LineChart geometry.
+- **Guide**: 46 stale statements corrected (key format/hashing, statuses, driver table, feature claims,
+  GPT-OSS on vLLM, admin credentials), About page rewritten with version/pinned images/links and an accurate
+  Aulendur Labs description, "Users & Orgs" section written, a vitest guardrail rejects known-stale phrases,
+  unknown make targets and unpinned image tags.
+
 ### Fixed
 - **Configure Model lost settings on reopen**: the model list response now returns every configuration field
   (GPU selection, sampling defaults, custom request extras, llama.cpp speculative/startup options) and the

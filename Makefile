@@ -286,6 +286,7 @@ test-integration: ## Backend integration tests against the running gateway (admi
 test-frontend: ## Frontend vitest + typecheck inside the running frontend container
 	@docker exec $(FRONTEND_CONTAINER) npx vitest run
 	@docker exec $(FRONTEND_CONTAINER) npm run typecheck
+	@docker exec $(FRONTEND_CONTAINER) npm run lint
 
 test-live: ## Live llama.cpp inference test: make test-live GGUF=<path relative to models dir>
 ifndef GGUF

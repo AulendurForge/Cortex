@@ -84,40 +84,66 @@ def ensure_host_ip_in_allowlist(ip_allowlist: str) -> str:
     return ",".join(existing_ips)
 
 
-def get_client_ip(request: Request) -> Optional[str]:
-    """Get the real client IP address from a request.
-    
-    Handles both direct connections and reverse proxy scenarios:
-    1. Checks X-Forwarded-For header (most common proxy header)
-    2. Checks X-Real-IP header (nginx, traefik)
-    3. Falls back to request.client.host (direct connection)
-    
-    Args:
-        request: FastAPI Request object
-        
-    Returns:
-        Client IP address string, or None if not available
-    """
-    # Method 1: Check X-Forwarded-For (most common proxy header)
-    # Format: "client_ip, proxy1_ip, proxy2_ip"
-    # We want the first IP (original client)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP from the comma-separated list
-        first_ip = forwarded_for.split(",")[0].strip()
-        if first_ip:
-            return first_ip
-    
-    # Method 2: Check X-Real-IP (nginx, traefik)
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        ip = real_ip.strip()
-        if ip:
-            return ip
-    
-    # Method 3: Fallback to direct connection IP
-    if request.client:
-        return request.client.host
-    
-    return None
+def parse_networks(raw: str) -> list["ipaddress.IPv4Network | ipaddress.IPv6Network"]:
+    """Parse a comma-separated list of IPs / CIDR ranges; invalid entries are skipped."""
+    import ipaddress
+    out = []
+    for item in (raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            out.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            continue
+    return out
 
+
+def ip_in_networks(ip: Optional[str], networks) -> bool:
+    import ipaddress
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    return any(addr in n for n in networks)
+
+
+def validate_allowlist(raw: str) -> list[str]:
+    """Return the invalid entries of an allowlist string (IPs or CIDRs)."""
+    import ipaddress
+    bad = []
+    for item in (raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            bad.append(item)
+    return bad
+
+
+def get_client_ip(request: Request) -> Optional[str]:
+    """Client IP for allowlists and logs.
+
+    ``X-Forwarded-For`` / ``X-Real-IP`` are honoured only when the direct peer is one of
+    ``TRUSTED_PROXY_IPS``; otherwise anyone could bypass an IP allowlist by sending the header.
+    """
+    peer = request.client.host if request.client else None
+    try:
+        from ..config import get_settings
+        trusted = parse_networks(get_settings().TRUSTED_PROXY_IPS)
+    except Exception:
+        trusted = []
+    if trusted and ip_in_networks(peer, trusted):
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            first_ip = forwarded_for.split(",")[0].strip()
+            if first_ip:
+                return first_ip
+        real_ip = (request.headers.get("X-Real-IP") or "").strip()
+        if real_ip:
+            return real_ip
+    return peer

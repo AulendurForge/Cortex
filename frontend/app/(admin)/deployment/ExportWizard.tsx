@@ -2,10 +2,10 @@
 
 import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Card, InfoBox, Input, Table, TextArea, FormField } from '../../../src/components/UI';
-import { useToast } from '../../../src/providers/ToastProvider';
-import { cn } from '../../../src/lib/cn';
-import type { ModelItem } from '../../../src/lib/validators';
+import { Badge, Button, Card, InfoBox, Input, Table, TextArea, FormField } from '@/components/UI';
+import { useToast } from '@/providers/ToastProvider';
+import { cn } from '@/lib/cn';
+import type { ModelItem } from '@/lib/validators';
 import {
   ExportArtifactsSchema, ExportRequest, ImageOption, ImageRole, JobController, QK,
   errMsg, flattenLocations, formatBytes, startExport, useBundleImages, useDebounced, useExportPlan, useExportableModels, useLocations,

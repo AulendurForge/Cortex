@@ -3,9 +3,9 @@
 import React, { Suspense } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
-import { InfoBox, PageHeader } from '../../../src/components/UI';
-import { Tabs } from '../../../src/components/Tabs';
-import { useToast } from '../../../src/providers/ToastProvider';
+import { InfoBox, PageHeader } from '@/components/UI';
+import { Tabs } from '@/components/Tabs';
+import { useToast } from '@/providers/ToastProvider';
 import { JobController, QK, cancelJob, errMsg, isJobActive, jobTypeLabel, relativeTime, useJobStatus } from './api';
 import { ExportWizard } from './ExportWizard';
 import { ImportWizard } from './ImportWizard';

@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../src/components/UI';
-import { cn } from '../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from './Attribution';
 
 export default function DeploymentMigration() {
   return (
-    <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-700">
+    <section className="space-y-6 duration-700">
       <header className="space-y-2 text-center md:text-left">
         <h1 className="text-2xl font-black tracking-tight text-white uppercase italic">Transfer &amp; Offline Deployment</h1>
         <p className="text-white/60 text-sm leading-relaxed max-w-3xl">
@@ -52,7 +53,7 @@ export default function DeploymentMigration() {
             </p>
             <InfoBox variant="blue" className="text-[11px] p-3">
               <strong>Exact engine images.</strong> Every model records the exact engine image it runs on (for example
-              <code className="mx-1">vllm/vllm-openai:v0.28.1</code>). Exports ship that exact tag — never <code>latest</code> — so
+              <code className="mx-1">vllm/vllm-openai:v0.28.0</code>). Exports ship that exact tag — never <code>latest</code> — so
               the model starts on the offline host with the same engine it was tested with. Selecting a model in the Export
               tab automatically adds its image.
             </InfoBox>
@@ -205,9 +206,7 @@ export default function DeploymentMigration() {
         </div>
       </Card>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Transfer Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Transfer Guide" />
     </section>
   );
 }
@@ -229,7 +228,7 @@ function WorkflowStep({ num, label, color }: { num: number; label: string; color
 }
 
 function Arrow() {
-  return <span className="text-white/30">→</span>;
+  return <span className="text-white/30" aria-hidden="true">→</span>;
 }
 
 function StepItem({ num, children }: { num: number; children: React.ReactNode }) {
@@ -270,7 +269,7 @@ function TroubleshootItem({ issue, solution }: { issue: string; solution: string
   return (
     <Card className="p-3 bg-white/[0.02] border-white/5">
       <div className="flex items-start gap-3">
-        <span className="text-amber-400 text-sm mt-0.5">?</span>
+        <span className="text-amber-400 text-sm mt-0.5" aria-hidden="true">?</span>
         <div className="space-y-1">
           <div className="text-[11px] font-bold text-white">{issue}</div>
           <div className="text-[11px] text-white/60 leading-relaxed">{solution}</div>

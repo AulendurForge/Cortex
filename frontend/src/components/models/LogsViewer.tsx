@@ -82,9 +82,9 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
     };
     setLoading(true);
     void loadOnce();
-    if (live) timer = setInterval(() => { void loadOnce(); }, Math.max(750, pollMs));
+    if (live && modelState !== 'stopped') timer = setInterval(() => { void loadOnce(); }, Math.max(750, pollMs));
     return () => { stop = true; if (timer) clearInterval(timer); };
-  }, [modelId, live, pollMs, tail, reloadTick]);
+  }, [modelId, live, pollMs, tail, reloadTick, modelState]);
 
   // Track scroll position for follow behavior
   React.useEffect(() => {

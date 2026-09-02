@@ -1,13 +1,15 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { cn } from '../../lib/cn';
 
 export type MiniKpi = { label: string; value: React.ReactNode };
 
 export function Accordion({ children, storageKey = 'accordion-state', className = '' }: { children: React.ReactNode; storageKey?: string; className?: string }) {
-  return <div className={cn('space-y-3', className)}>{children}</div>;
+  return <AccordionScope.Provider value={storageKey}><div className={cn('space-y-3', className)}>{children}</div></AccordionScope.Provider>;
 }
+
+const AccordionScope = React.createContext('accordion-state');
 
 export function AccordionItem({
   id,
@@ -16,7 +18,7 @@ export function AccordionItem({
   defaultOpen = true,
   children,
   actions,
-  storageKey = 'accordion-state',
+  storageKey,
 }: {
   id: string;
   title: React.ReactNode;
@@ -26,11 +28,13 @@ export function AccordionItem({
   actions?: React.ReactNode;
   storageKey?: string;
 }) {
-  const [open, setOpen] = usePersistentOpen(storageKey, id, defaultOpen);
+  const scope = React.useContext(AccordionScope);
+  const [open, setOpen] = usePersistentOpen(storageKey ?? scope, id, defaultOpen);
 
   return (
     <div className="card rounded-xl">
       <button
+        type="button"
         className="w-full flex items-center justify-between gap-3 px-3 py-2 bg-white/5 hover:bg-white/10 transition-colors"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -63,17 +67,21 @@ export function AccordionItem({
 
 function usePersistentOpen(storageKey: string, id: string, defaultOpen: boolean): [boolean, React.Dispatch<React.SetStateAction<boolean>>] {
   const key = `${storageKey}:${id}`;
-  const [open, setOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return defaultOpen;
+  // Server and first client render both use defaultOpen (no hydration mismatch); the stored
+  // preference is applied after mount and written back on change.
+  const [open, setOpen] = useState<boolean>(defaultOpen);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(key);
-      if (raw === null) return defaultOpen;
-      return raw === '1';
-    } catch { return defaultOpen; }
-  });
+      if (raw !== null) setOpen(raw === '1');
+    } catch { /* storage unavailable */ }
+    setHydrated(true);
+  }, [key]);
   useEffect(() => {
-    try { localStorage.setItem(key, open ? '1' : '0'); } catch {}
-  }, [key, open]);
+    if (!hydrated) return;
+    try { localStorage.setItem(key, open ? '1' : '0'); } catch { /* storage unavailable */ }
+  }, [key, open, hydrated]);
   return [open, setOpen];
 }
 

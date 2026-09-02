@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { HostIpDisplay, useHostIP } from '../../../../../src/components/HostIpDisplay';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { HostIpDisplay, useHostIP } from '@/components/HostIpDisplay';
+import { cn } from '@/lib/cn';
 import { useState } from 'react';
-import { useToast } from '../../../../../src/providers/ToastProvider';
-import { safeCopyToClipboard } from '../../../../../src/lib/clipboard';
+import { useToast } from '@/providers/ToastProvider';
+import { safeCopyToClipboard } from '@/lib/clipboard';
+import { Attribution } from '../Attribution';
 
 export default function FirstModelTutorial() {
   const hostIP = useHostIP();
@@ -55,7 +56,7 @@ export default function FirstModelTutorial() {
       <Card className="p-5 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-blue-500/10 border-white/5">
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">🎯</span>
+            <span className="text-2xl" aria-hidden="true">🎯</span>
             <h2 className="text-lg font-bold text-white">Spin Up Your First Model</h2>
           </div>
           <p className="text-[13px] text-white/80 leading-relaxed">
@@ -243,7 +244,7 @@ export default function FirstModelTutorial() {
 
             <StepInstruction step={2} title="Click 'Add Model'">
               <p className="text-[11px] text-white/70">
-                Click the <span className="inline-flex items-center px-2 py-0.5 bg-cyan-500/20 text-cyan-300 rounded text-[10px] font-bold">➕ Add Model</span>{' '}
+                Click the <span className="inline-flex items-center px-2 py-0.5 bg-cyan-500/20 text-cyan-300 rounded text-[10px] font-bold"><span aria-hidden="true" className="mr-1">➕</span>Add Model</span>{' '}
                 button in the top right corner. This opens the model configuration wizard.
               </p>
             </StepInstruction>
@@ -299,14 +300,14 @@ export default function FirstModelTutorial() {
                     detail="Pick any available GPU"
                   />
                   <SettingItem 
-                    label="Max Context" 
+                    label="Max model length" 
                     value="2048"
-                    detail="Start small, increase later"
+                    detail="Start small; empty = the model's own maximum"
                   />
                   <SettingItem 
-                    label="Memory Utilization" 
-                    value="0.90"
-                    detail="Safe starting point"
+                    label="GPU memory utilization" 
+                    value="0.92 (default)"
+                    detail="Leave empty for the default; lower it on a shared GPU"
                   />
                 </div>
               </div>
@@ -322,8 +323,8 @@ export default function FirstModelTutorial() {
 
           <InfoBox variant="cyan" className="text-[11px] p-3">
             <strong>Memory Allocation Tips:</strong> If the model fails to start with OOM errors, try reducing 
-            <code className="bg-black/30 px-1 mx-1 rounded">Max Context</code> or{' '}
-            <code className="bg-black/30 px-1 mx-1 rounded">Memory Utilization</code>. Start conservative and increase once working.
+            <code className="bg-black/30 px-1 mx-1 rounded">Max model length</code> or{' '}
+            <code className="bg-black/30 px-1 mx-1 rounded">GPU memory utilization</code>. Start conservative and increase once working.
           </InfoBox>
         </Card>
       </section>
@@ -335,8 +336,8 @@ export default function FirstModelTutorial() {
           <div className="space-y-4">
             <StepInstruction step={1} title="Start the Model">
               <p className="text-[11px] text-white/70">
-                In the Models table, find your model row and click the <span className="text-emerald-300 font-bold">▶ Start</span> button. 
-                The status will change from "Down" → "Starting" → "Loading" → "Running".
+                In the Models table, find your model row and click the <span className="text-emerald-300 font-bold">Start</span> button. 
+                The state badge will change from <code>stopped</code> → <code>starting</code> → <code>loading</code> → <code>running</code> (or <code>failed</code>, with the reason in the badge and Logs). While it is loading, the Stop button reads <strong>Cancel</strong>.
               </p>
               <InfoBox variant="blue" className="text-[10px] p-2 mt-2">
                 First startup takes longer as Docker pulls the inference engine image. Subsequent starts are faster.
@@ -345,15 +346,15 @@ export default function FirstModelTutorial() {
 
             <StepInstruction step={2} title="Monitor Progress">
               <p className="text-[11px] text-white/70">
-                Click the <span className="text-cyan-300 font-bold">📋 Logs</span> button to watch startup progress. 
+                Click the <span className="text-cyan-300 font-bold">Logs</span> button to watch startup progress. 
                 You'll see messages about loading model weights into GPU memory. Wait for "Model loaded successfully" or similar.
               </p>
             </StepInstruction>
 
             <StepInstruction step={3} title="Run the Built-in Test">
               <p className="text-[11px] text-white/70">
-                Once the model shows "Running", click the <span className="text-purple-300 font-bold">🧪 Test</span> button. 
-                This sends a simple prompt and verifies the model responds correctly.
+                Once the model is <code>running</code>, click the <span className="text-purple-300 font-bold">Test</span> button. 
+                This sends a simple prompt and reports whether the model answered and how long the round trip took.
               </p>
             </StepInstruction>
           </div>
@@ -372,7 +373,7 @@ export default function FirstModelTutorial() {
             {/* Chat Playground */}
             <Card className="p-4 bg-black/30 border-white/10 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="text-xl">💬</span>
+                <span className="text-xl" aria-hidden="true">💬</span>
                 <div className="text-[12px] font-bold text-white">Chat Playground</div>
               </div>
               <p className="text-[11px] text-white/60 leading-relaxed">
@@ -389,12 +390,13 @@ export default function FirstModelTutorial() {
             {/* API Endpoint */}
             <Card className="p-4 bg-black/30 border-white/10 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="text-xl">🔌</span>
+                <span className="text-xl" aria-hidden="true">🔌</span>
                 <div className="text-[12px] font-bold text-white">API Endpoint</div>
               </div>
               <p className="text-[11px] text-white/60 leading-relaxed">
-                Send requests from any application using the OpenAI-compatible API. 
-                Use an API key or the dev mode endpoint.
+                Send requests from any application using the OpenAI-compatible API with an API key from the
+                All API Keys / My API Keys page. (The dev stack sets <code>GATEWAY_DEV_ALLOW_ALL_KEYS=true</code>, which also
+                accepts requests that carry no key at all.)
               </p>
               <div className="text-[10px] font-mono text-cyan-300 bg-black/50 p-2 rounded break-all">
                 {`http://${hostIP || 'YOUR_IP'}:8084/v1/chat/completions`}
@@ -438,8 +440,8 @@ export default function FirstModelTutorial() {
             </div>
             <div className="text-[10px] text-white/50">
               Replace <code className="text-amber-300">YOUR_API_KEY</code> with a key from the{' '}
-              <Link href="/keys" className="text-cyan-300 underline">API Keys</Link> page, 
-              or use dev mode if enabled.
+              <Link href="/keys" className="text-cyan-300 underline">API Keys</Link> page.
+              In the dev stack (<code>GATEWAY_DEV_ALLOW_ALL_KEYS=true</code>) a request without an Authorization header is accepted too.
             </div>
           </div>
 
@@ -455,7 +457,7 @@ export default function FirstModelTutorial() {
 
 client = OpenAI(
     base_url="http://${hostIP || 'YOUR_IP'}:8084/v1",
-    api_key="YOUR_API_KEY"  # or any string if dev mode is enabled
+    api_key="YOUR_API_KEY"  # from the API Keys page
 )
 
 response = client.chat.completions.create(
@@ -477,7 +479,7 @@ print(response.choices[0].message.content)`,
 
 client = OpenAI(
     base_url="http://${hostIP || 'YOUR_IP'}:8084/v1",
-    api_key="YOUR_API_KEY"  # or any string if dev mode is enabled
+    api_key="YOUR_API_KEY"  # from the API Keys page
 )
 
 response = client.chat.completions.create(
@@ -496,7 +498,7 @@ print(response.choices[0].message.content)`}
       {/* Success & Next Steps */}
       <Card className="p-5 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-blue-500/10 border-emerald-500/20 space-y-4">
         <div className="flex items-start gap-4">
-          <div className="text-3xl">🎉</div>
+          <div className="text-3xl" aria-hidden="true">🎉</div>
           <div className="space-y-3">
             <h3 className="text-[14px] font-bold text-white">Congratulations!</h3>
             <p className="text-[12px] text-white/70 leading-relaxed">
@@ -505,19 +507,19 @@ print(response.choices[0].message.content)`}
             </p>
             <ul className="text-[12px] text-white/70 space-y-2">
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">→</span>
+                <span className="text-emerald-400" aria-hidden="true">→</span>
                 <span>Try a <strong className="text-white">larger model</strong> like Llama 3.1 8B (needs ~16GB VRAM)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">→</span>
+                <span className="text-emerald-400" aria-hidden="true">→</span>
                 <span>Deploy an <strong className="text-white">embedding model</strong> for RAG applications</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">→</span>
+                <span className="text-emerald-400" aria-hidden="true">→</span>
                 <span>Create <strong className="text-white">API keys</strong> for team members</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">→</span>
+                <span className="text-emerald-400" aria-hidden="true">→</span>
                 <span>Explore <strong className="text-white">llama.cpp</strong> for GGUF quantized models</span>
               </li>
             </ul>
@@ -534,9 +536,7 @@ print(response.choices[0].message.content)`}
         </Link>{' '}for deployment-specific issues.
       </InfoBox>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex First Model Tutorial • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex First Model Tutorial" />
     </section>
   );
 }
@@ -611,7 +611,7 @@ function ChecklistCard({ title, items }: { title: string; items: { label: string
         {items.map((item, i) => (
           <li key={i} className="text-[11px] text-white/70">
             <div className="flex items-start gap-2">
-              <span className="text-cyan-400">□</span>
+              <span className="text-cyan-400" aria-hidden="true">□</span>
               <div>
                 <div className="font-medium">{item.label}</div>
                 <code className="text-[10px] text-cyan-300 bg-black/30 px-1 rounded">{item.command}</code>

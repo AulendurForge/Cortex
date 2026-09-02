@@ -7,14 +7,14 @@ import hmac
 import logging
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import Depends, Header, HTTPException, Request
 
 from .config import get_settings
 from .crypto import verify_key
 from .metrics import KEY_AUTH_ALLOWED, KEY_AUTH_BLOCKED
-from .models import APIKey
+from .models import APIKey, User
 from .utils.ip_utils import get_client_ip
 from sqlalchemy import select
 
@@ -102,10 +102,25 @@ def verify_session_token(token: str | None) -> str | None:
 # API keys (/v1)
 # ---------------------------------------------------------------------------
 
+def _as_utc(dt: datetime) -> datetime:
+    """Naive datetimes are stored/entered as UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _parse_ip_allowlist(raw: str) -> list[str]:
     if not raw:
         return []
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def ip_allowed(client_ip: str | None, allowlist: list[str]) -> bool:
+    """Exact IPs and CIDR ranges are both accepted; an empty allowlist allows everything."""
+    if not allowlist:
+        return True
+    from .utils.ip_utils import parse_networks, ip_in_networks
+    if client_ip in allowlist:
+        return True
+    return ip_in_networks(client_ip, parse_networks(",".join(allowlist)))
 
 
 _ALL_SCOPES = {"chat", "completions", "embeddings"}
@@ -119,7 +134,16 @@ async def require_api_key(request: Request, authorization: str = Header(None), s
         session_user = verify_session_token(request.cookies.get(SESSION_COOKIE))
         if session_user:
             KEY_AUTH_ALLOWED.labels(reason="session").inc()
-            return {"key_id": None, "scopes": set(_ALL_SCOPES), "session_user": session_user}
+            ctx = {"key_id": None, "scopes": set(_ALL_SCOPES), "session_user": session_user, "user_id": None, "org_id": None}
+            if SessionLocal is not None:
+                try:
+                    async with SessionLocal() as session:
+                        row = (await session.execute(select(User.id, User.org_id).where(User.username == session_user))).first()
+                    if row:
+                        ctx["user_id"], ctx["org_id"] = row[0], row[1]
+                except Exception:
+                    pass
+            return ctx
         if settings.GATEWAY_DEV_ALLOW_ALL_KEYS:
             KEY_AUTH_ALLOWED.labels(reason="dev_bypass").inc()
             return {"key_id": None, "scopes": set(_ALL_SCOPES)}
@@ -141,7 +165,7 @@ async def require_api_key(request: Request, authorization: str = Header(None), s
         if not row:
             KEY_AUTH_BLOCKED.labels(reason="not_found").inc()
             raise HTTPException(status_code=401, detail="Invalid API key")
-        if row.expires_at and row.expires_at < datetime.utcnow():
+        if row.expires_at and _as_utc(row.expires_at) < datetime.now(timezone.utc):
             KEY_AUTH_BLOCKED.labels(reason="expired").inc()
             raise HTTPException(status_code=401, detail="API key expired")
         if not verify_key(key, row.hash):
@@ -149,7 +173,7 @@ async def require_api_key(request: Request, authorization: str = Header(None), s
             raise HTTPException(status_code=401, detail="Invalid API key")
         client_ip = get_client_ip(request)
         allowlist = _parse_ip_allowlist(row.ip_allowlist)
-        if allowlist and client_ip and client_ip not in allowlist:
+        if allowlist and not ip_allowed(client_ip, allowlist):
             KEY_AUTH_BLOCKED.labels(reason="ip").inc()
             raise HTTPException(status_code=403, detail=f"IP {client_ip} not allowed. Allowed IPs: {', '.join(allowlist)}")
         try:
@@ -158,9 +182,9 @@ async def require_api_key(request: Request, authorization: str = Header(None), s
         except Exception:
             await session.rollback()
         scopes = {s.strip() for s in (row.scopes or "").split(",") if s.strip()}
-        key_id = row.id
+        key_id, key_user_id, key_org_id = row.id, row.user_id, row.org_id
     KEY_AUTH_ALLOWED.labels(reason="ok").inc()
-    return {"key_id": key_id, "scopes": scopes}
+    return {"key_id": key_id, "scopes": scopes, "user_id": key_user_id, "org_id": key_org_id}
 
 
 # ---------------------------------------------------------------------------

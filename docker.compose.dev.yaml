@@ -121,6 +121,9 @@ services:
     environment:
       NODE_ENV: development
       # The UI derives the gateway URL from the browser hostname; this only labels the host IP display
+      # Gateway address for the browser, read at request time: empty = <this host>:8084 (LAN/dev),
+      # "/" = same origin (behind the TLS reverse proxy), or a full URL.
+      CORTEX_GATEWAY_URL: ${CORTEX_GATEWAY_URL:-}
       NEXT_PUBLIC_HOST_IP: ${HOST_IP:-localhost}
     ports: ["${FRONTEND_PORT:-3001}:3001"]
     depends_on:

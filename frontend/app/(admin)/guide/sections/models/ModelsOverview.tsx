@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function ModelsOverview() {
   return (
@@ -14,7 +15,7 @@ export default function ModelsOverview() {
             <p className="text-[13px] text-white/80 leading-relaxed">
               Cortex provides a unified interface for deploying and managing Large Language Models (LLMs) 
               on your infrastructure. Whether you're running chat models, embedding services, or specialized 
-              AI workloads, the Models page is your central hub for orchestrating inference pools.
+              AI workloads, the Models page is where you add, start, stop and configure them.
             </p>
             <div className="flex flex-wrap gap-2">
               <Badge className="bg-emerald-500/10 text-emerald-300 border-emerald-500/20">Chat/Generate</Badge>
@@ -72,7 +73,7 @@ export default function ModelsOverview() {
           <Card className="p-4 bg-white/[0.02] border-white/5 space-y-4">
             <ConceptItem 
               term="Inference Engine"
-              definition="The software that loads and runs your model. Cortex supports vLLM (best performance for most models) and llama.cpp (for GGUF models and special architectures like GPT-OSS)."
+              definition="The software that loads and runs your model. Cortex supports vLLM (best performance for safetensors checkpoints, including gpt-oss with the gpt_oss reasoning parser and mxfp4 quantization) and llama.cpp (every GGUF file, single or multi-part)."
             />
             <ConceptItem 
               term="Model Task"
@@ -102,8 +103,8 @@ export default function ModelsOverview() {
               definition="A quantized model format used by llama.cpp. GGUF files have quantization built-in (e.g., Q4_K_M, Q8_0) and are typically smaller than SafeTensors."
             />
             <ConceptItem 
-              term="Model Pool"
-              definition="A running model deployment. Cortex manages each as a Docker container with specific GPU allocations and configurations."
+              term="Managed Container"
+              definition="Each model runs in its own Docker container (vllm-model-<id> or llamacpp-model-<id>) with the GPUs and settings you chose; the gateway routes requests to it by served model name."
             />
           </Card>
         </div>
@@ -137,29 +138,33 @@ export default function ModelsOverview() {
       {/* Model States */}
       <section className="space-y-3">
         <SectionTitle variant="cyan" className="text-[10px]">Model States</SectionTitle>
+        <p className="text-[11px] text-white/60 leading-relaxed">
+          Stopping passes briefly through <code className="text-cyan-300">stopping</code> on the way back to <code className="text-cyan-300">stopped</code>.
+          While a model is <code className="text-cyan-300">loading</code>, its Stop button reads <strong className="text-white">Cancel</strong>.
+        </p>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StateCard 
-            state="Down" 
+            state="stopped" 
             color="neutral" 
             description="Not running. Configuration exists but container is stopped."
           />
           <StateCard 
-            state="Starting" 
+            state="starting" 
             color="amber" 
             description="Container initializing. Pulling image or preparing environment."
           />
           <StateCard 
-            state="Loading" 
+            state="loading" 
             color="cyan" 
             description="Model weights loading into GPU memory. May take several minutes for large models."
           />
           <StateCard 
-            state="Running" 
+            state="running" 
             color="emerald" 
             description="Ready for inference. Model is actively serving requests."
           />
           <StateCard 
-            state="Failed" 
+            state="failed" 
             color="red" 
             description="Error occurred. Check logs for details—common causes include VRAM shortage or path issues."
           />
@@ -175,7 +180,7 @@ export default function ModelsOverview() {
               <strong className="text-white">Verify GPU availability</strong> — Visit the <Link href="/health" className="text-emerald-300 hover:text-emerald-200 underline">Health page</Link> to confirm your GPUs are detected and have sufficient VRAM.
             </ChecklistItem>
             <ChecklistItem num={2}>
-              <strong className="text-white">Choose your engine</strong> — Use <span className="text-blue-300">vLLM</span> for most HuggingFace models, or <span className="text-emerald-300">llama.cpp</span> for GGUF files and GPT-OSS models.
+              <strong className="text-white">Choose your engine</strong> — Use <span className="text-blue-300">vLLM</span> for most HuggingFace models, or <span className="text-emerald-300">llama.cpp</span> for GGUF files (any GGUF, single or multi-part, always runs on llama.cpp).
             </ChecklistItem>
             <ChecklistItem num={3}>
               <strong className="text-white">Prepare your model</strong> — For <span className="text-amber-300">Online</span> mode, know your HuggingFace repo ID. For <span className="text-purple-300">Offline</span> mode, place model files in the configured models directory.
@@ -205,13 +210,11 @@ export default function ModelsOverview() {
       {/* Important Notes */}
       <InfoBox variant="blue" className="text-[11px] p-4">
         <strong>Tip:</strong> New to LLM deployment? Start with a smaller model (7B-8B parameters) to learn the workflow. 
-        Once comfortable, scale up to larger models with more GPUs. The <span className="text-cyan-300">🧮 Calculator</span> button 
+        Once comfortable, scale up to larger models with more GPUs. The <span className="text-cyan-300">Calculator</span> button 
         in the Models page helps estimate VRAM requirements before deployment.
       </InfoBox>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Model Management Overview • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Model Management Overview" />
     </section>
   );
 }
@@ -242,7 +245,7 @@ function ActionCard({ icon, title, description, color }: { icon: string; title: 
   };
   return (
     <Card className={cn("p-4 bg-white/[0.02] border-white/5 group transition-all duration-300", colors[color])}>
-      <div className="text-2xl mb-2 group-hover:scale-110 transition-transform">{icon}</div>
+      <div className="text-2xl mb-2 group-hover:scale-110 transition-transform" aria-hidden="true">{icon}</div>
       <div className="text-[11px] font-bold text-white uppercase tracking-wider">{title}</div>
       <div className="text-[10px] text-white/50 mt-1 leading-relaxed">{description}</div>
     </Card>
@@ -275,7 +278,7 @@ function FlowStep({ num, label, desc, color }: { num: number; label: string; des
 }
 
 function Arrow() {
-  return <span className="text-white/30 text-lg">→</span>;
+  return <span className="text-white/30 text-lg" aria-hidden="true">→</span>;
 }
 
 function StateCard({ state, color, description }: { state: string; color: string; description: string }) {

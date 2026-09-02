@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..auth import require_api_key
 from ..config import get_settings
 from ..middleware.usage import record_usage
+from ..services.sse_usage import SseUsageTee
 from ..middleware.ratelimit import acquire_stream_slot, release_stream_slot
 from ..schemas.openai import ChatCompletionRequest, CompletionRequest, EmbeddingsRequest
 import time
@@ -56,6 +57,13 @@ def _messages_to_prompt(messages: list[dict]) -> str:
         return "\n\n".join(parts)
     except Exception:
         return ""
+
+def _identity(auth_ctx) -> dict:
+    """key/user/org attribution for usage rows (API key owner, or the signed-in admin UI user)."""
+    if not auth_ctx:
+        return {"key_id": None, "user_id": None, "org_id": None}
+    return {"key_id": auth_ctx.get("key_id"), "user_id": auth_ctx.get("user_id"), "org_id": auth_ctx.get("org_id")}
+
 
 
 # ============================================================================
@@ -494,6 +502,11 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
         if not ok:
             STREAM_BLOCKED.labels(identifier=identifier).inc()
             raise HTTPException(status_code=429, detail="too_many_concurrent_streams")
+        # Ask the engine for the final usage chunk so streamed requests are metered with real
+        # token counts; the chunk is stripped again unless the client asked for it.
+        so = payload.get("stream_options") if isinstance(payload.get("stream_options"), dict) else {}
+        client_wants_usage = bool(so.get("include_usage"))
+        payload["stream_options"] = {**so, "include_usage": True}
         # Dynamic timeout based on model size and request complexity
         timeout = get_timeout_for_request(payload.get("model", ""), payload.get("max_tokens", 1000), True)
         # Manually manage stream context so it stays open until response completes
@@ -509,22 +522,44 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
                 r = JSONResponse(status_code=resp.status_code, content=content)
             except Exception:
                 r = JSONResponse(status_code=resp.status_code, content={"error": data.decode(errors="ignore")})
-            await record_usage(request, r, start_ns, payload.get("model", ""), "generate", key_id=auth_ctx.get("key_id") if auth_ctx else None)
+            await record_usage(request, r, start_ns, payload.get("model", ""), "generate", **_identity(auth_ctx))
             if resp.status_code >= 500:
                 _cb_record_failure(base_url)
                 UPSTREAM_ERROR.labels(path=path).inc()
             return r
 
         first = True
+        tee = SseUsageTee(forward_usage_chunk=client_wants_usage)
+        recorded = False
+
+        async def _record_stream(status: int):
+            nonlocal recorded
+            if recorded:
+                return
+            recorded = True
+            pt, ct, tt = tee.tokens()
+            await record_usage(request, None, start_ns, payload.get("model", ""), "generate", **_identity(auth_ctx),
+                               prompt_tokens=pt, completion_tokens=ct, total_tokens=tt, req_id=req_id, status_code=status,
+                               end_ns=time.time_ns())
+
         async def agen() -> AsyncIterator[bytes]:
             nonlocal first
             start = time.time()
-            async for chunk in resp.aiter_raw():
-                if chunk:
-                    if first:
-                        first = False
-                        STREAM_TTFT_SECONDS.labels(path=path).observe(time.time() - start)
-                    yield chunk
+            try:
+                async for chunk in resp.aiter_raw():
+                    if chunk:
+                        if first:
+                            first = False
+                            STREAM_TTFT_SECONDS.labels(path=path).observe(time.time() - start)
+                        out = tee.feed(chunk)
+                        if out:
+                            yield out
+                tail = tee.flush()
+                if tail:
+                    yield tail
+            finally:
+                # metered once the stream ends (or the client disconnects): real token counts and duration
+                await _record_stream(resp.status_code)
 
         async def close_and_release():
             try:
@@ -535,7 +570,6 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
         ctype = resp.headers.get("content-type", "text/event-stream")
         background = BackgroundTask(close_and_release)
         sr = StreamingResponse(agen(), media_type=ctype, background=background)
-        await record_usage(request, sr, start_ns, payload.get("model", ""), "generate", key_id=auth_ctx.get("key_id") if auth_ctx else None)
         if 200 <= resp.status_code < 500:
             _cb_record_success(base_url)
             UPSTREAM_SUCCESS.labels(path=path).inc()
@@ -627,7 +661,7 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
                     except Exception:
                         normalized = {"object": "chat.completion", "choices": [{"message": {"role": "assistant", "content": data_c}}]}
                     r = JSONResponse(status_code=200, content=normalized)
-                    await record_usage(request, r, start_ns, payload.get("model", ""), "generate", key_id=auth_ctx.get("key_id") if auth_ctx else None)
+                    await record_usage(request, r, start_ns, payload.get("model", ""), "generate", **_identity(auth_ctx))
                     _cb_record_success(base_url)
                     UPSTREAM_SUCCESS.labels(path=path).inc()
                     return r
@@ -642,7 +676,7 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
         except Exception:
             content = {"error": resp.text}
         r = JSONResponse(status_code=resp.status_code, content=content)
-        await record_usage(request, r, start_ns, payload.get("model", ""), "embed" if path.endswith("embeddings") else "generate", key_id=auth_ctx.get("key_id") if auth_ctx else None)
+        await record_usage(request, r, start_ns, payload.get("model", ""), "embed" if path.endswith("embeddings") else "generate", **_identity(auth_ctx))
         if resp.status_code >= 500:
             _cb_record_failure(base_url)
         else:
@@ -701,7 +735,7 @@ async def forward_json(request: Request, base_url: str, path: str, internal_key:
         start_ns,
         payload.get("model", ""),
         "embed" if path.endswith("embeddings") else "generate",
-        key_id=auth_ctx.get("key_id") if auth_ctx else None,
+        **_identity(auth_ctx),
         prompt_tokens=pt,
         completion_tokens=ct,
         total_tokens=tt,

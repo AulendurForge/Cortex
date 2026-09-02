@@ -14,6 +14,11 @@ interface BasicModelInfoProps {
   modeLocked?: boolean;
 }
 
+/** Lowercase, dashes for spaces, no special characters. */
+export function deriveServedName(display: string): string {
+  return (display || '').toLowerCase().replace(/[^a-z0-9\-\_\s]/g, '').replace(/\s+/g, '-');
+}
+
 export function BasicModelInfo({
   name,
   servedModelName,
@@ -24,6 +29,10 @@ export function BasicModelInfo({
   onTaskChange,
   modeLocked = false,
 }: BasicModelInfoProps) {
+  // Auto-derive the served name from the display name only while the admin has not typed a served
+  // name themselves, and never in Configure mode: renaming a running model must not change the
+  // identifier clients call (the backend rejects that with 409).
+  const servedEdited = React.useRef(servedModelName !== '' && servedModelName !== deriveServedName(name));
   if (!engineType) return null;
 
   return (
@@ -36,8 +45,7 @@ export function BasicModelInfo({
           onChange={(e) => {
             const v = e.target.value;
             onNameChange(v);
-            const derived = (v || '').toLowerCase().replace(/[^a-z0-9\-\_\s]/g, '').replace(/\s+/g, '-');
-            onServedModelNameChange(derived);
+            if (!modeLocked && !servedEdited.current) onServedModelNameChange(deriveServedName(v));
           }} 
           required 
         />
@@ -49,11 +57,11 @@ export function BasicModelInfo({
         <input 
           className="input mt-1" 
           value={servedModelName} 
-          onChange={(e) => onServedModelNameChange(e.target.value)} 
+          onChange={(e) => { servedEdited.current = true; onServedModelNameChange(e.target.value); }} 
           required 
         />
         <p className="text-[11px] text-white/50 mt-1">
-          Identifier used by the OpenAI API. Lowercase, no spaces; we auto‑derive from the display name. 
+          Identifier used by the OpenAI API. Lowercase, no spaces; derived from the display name until you edit it.{modeLocked ? ' A running model must be stopped before its served name can change.' : ''} 
           <Tooltip text="Also called 'served_model_name'. Clients call with { model: '<served-name>' }. Avoid special characters; use dashes instead of spaces." />
         </p>
       </label>

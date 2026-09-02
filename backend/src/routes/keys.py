@@ -12,9 +12,25 @@ def _get_session() -> Optional[object]:
 from ..models import APIKey, User
 from ..crypto import generate_api_key, hash_key
 from ..auth import require_user_session, require_admin
-from ..utils.ip_utils import ensure_host_ip_in_allowlist
+from ..utils.ip_utils import ensure_host_ip_in_allowlist, validate_allowlist
+from datetime import timezone
 
 router = APIRouter()
+# Self-service keys: any signed-in user manages their own keys (mounted without the admin guard)
+me_router = APIRouter()
+
+
+def _check_allowlist(raw: str) -> str:
+    bad = validate_allowlist(raw)
+    if bad:
+        raise HTTPException(status_code=422, detail=f"invalid IP allowlist entries: {', '.join(bad)} (use IPs or CIDR ranges, comma-separated)")
+    return ensure_host_ip_in_allowlist(raw)
+
+
+def _utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 class CreateKeyRequest(BaseModel):
@@ -123,8 +139,8 @@ async def list_keys(
 
 
 # Self-service: manage own keys using session cookie
-@router.get("/me/keys", response_model=list[KeyItem])
-async def list_my_keys(user = Depends(require_user_session)):
+@me_router.get("/me/keys", response_model=list[KeyItem])
+async def list_my_keys(include_disabled: bool = False, user = Depends(require_user_session)):
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")
@@ -133,7 +149,10 @@ async def list_my_keys(user = Depends(require_user_session)):
         u = (await session.execute(select(User).where(User.username == user["username"])) ).scalar_one_or_none()
         if not u:
             return []
-        rows = (await session.execute(select(APIKey).where(APIKey.user_id == u.id, APIKey.disabled == False).order_by(APIKey.id.desc()))).scalars().all()
+        stmt = select(APIKey).where(APIKey.user_id == u.id)
+        if not include_disabled:
+            stmt = stmt.where(APIKey.disabled == False)  # noqa: E712
+        rows = (await session.execute(stmt.order_by(APIKey.id.desc()))).scalars().all()
         return [
             KeyItem(
                 id=r.id,
@@ -155,24 +174,41 @@ class CreateMyKeyRequest(BaseModel):
     ip_allowlist: str = ""
 
 
-@router.post("/me/keys", response_model=CreateKeyResponse)
+@me_router.post("/me/keys", response_model=CreateKeyResponse)
 async def create_my_key(body: CreateMyKeyRequest, user = Depends(require_user_session)):
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")
     token, prefix = generate_api_key()
     hashed = hash_key(token)
-    # Automatically include host IP in allowlist if allowlist is provided
-    final_allowlist = ensure_host_ip_in_allowlist(body.ip_allowlist)
+    final_allowlist = _check_allowlist(body.ip_allowlist)
     async with SessionLocal() as session:
         u = (await session.execute(select(User).where(User.username == user["username"])) ).scalar_one_or_none()
         if not u:
             raise HTTPException(status_code=401, detail="unauthenticated")
-        rec = APIKey(prefix=prefix, hash=hashed, scopes=body.scopes, expires_at=body.expires_at, ip_allowlist=final_allowlist, user_id=u.id, org_id=u.org_id)
+        rec = APIKey(prefix=prefix, hash=hashed, scopes=body.scopes, expires_at=_utc(body.expires_at), ip_allowlist=final_allowlist, user_id=u.id, org_id=u.org_id)
         session.add(rec)
         await session.commit()
         await session.refresh(rec)
         return CreateKeyResponse(id=rec.id, prefix=rec.prefix, token=token)
+
+
+@me_router.delete("/me/keys/{key_id}")
+async def revoke_my_key(key_id: int, user = Depends(require_user_session)):
+    """Revoke one of the caller's own keys (other users' keys are reported as not found)."""
+    SessionLocal = _get_session()
+    if SessionLocal is None:
+        raise HTTPException(status_code=503, detail="Database not ready")
+    async with SessionLocal() as session:
+        u = (await session.execute(select(User).where(User.username == user["username"])) ).scalar_one_or_none()
+        if not u:
+            raise HTTPException(status_code=401, detail="unauthenticated")
+        rec = (await session.execute(select(APIKey).where(APIKey.id == key_id, APIKey.user_id == u.id))).scalar_one_or_none()
+        if not rec:
+            raise HTTPException(status_code=404, detail="Not found")
+        rec.disabled = True
+        await session.commit()
+    return {"status": "ok"}
 
 
 @router.post("/keys", response_model=CreateKeyResponse)
@@ -182,10 +218,9 @@ async def create_key(body: CreateKeyRequest):
         raise HTTPException(status_code=503, detail="Database not ready")
     token, prefix = generate_api_key()
     hashed = hash_key(token)
-    # Automatically include host IP in allowlist if allowlist is provided
-    final_allowlist = ensure_host_ip_in_allowlist(body.ip_allowlist)
+    final_allowlist = _check_allowlist(body.ip_allowlist)
     async with SessionLocal() as session:
-        rec = APIKey(prefix=prefix, hash=hashed, scopes=body.scopes, expires_at=body.expires_at, ip_allowlist=final_allowlist)
+        rec = APIKey(prefix=prefix, hash=hashed, scopes=body.scopes, expires_at=_utc(body.expires_at), ip_allowlist=final_allowlist)
         # attribution (optional)
         try:
             if body.user_id is not None:

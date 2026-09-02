@@ -4,15 +4,15 @@ import React from 'react';
 import { RangeSlider } from '../RangeSlider';
 import { cn } from '../../lib/cn';
 
-export type RangeStop = { label: string; value: number; prom: string };
+export type RangeStop = { label: string; value: number };
 
 const DEFAULT_STOPS: RangeStop[] = [
-  { label: '15m', value: 15, prom: '15m' },
-  { label: '1h', value: 60, prom: '1h' },
-  { label: '3h', value: 180, prom: '3h' },
-  { label: '6h', value: 360, prom: '6h' },
-  { label: '12h', value: 720, prom: '12h' },
-  { label: '24h', value: 1440, prom: '24h' },
+  { label: '15m', value: 15 },
+  { label: '1h', value: 60 },
+  { label: '3h', value: 180 },
+  { label: '6h', value: 360 },
+  { label: '12h', value: 720 },
+  { label: '24h', value: 1440 },
 ];
 
 export function TimeRangeControls({
@@ -38,14 +38,7 @@ export function TimeRangeControls({
         onChange={(v) => onChange(v)}
         className="w-72"
       />
-      <button className={cn('btn text-xs', live ? 'bg-emerald-500/20 border border-emerald-400/30' : '')} onClick={() => onToggleLive(!live)}>{live ? 'Live: On' : 'Live: Off'}</button>
+      <button type="button" aria-pressed={live} className={cn('btn text-xs', live ? 'bg-emerald-500/20 border border-emerald-400/30' : '')} onClick={() => onToggleLive(!live)}>{live ? 'Live: On' : 'Live: Off'}</button>
     </div>
   );
 }
-
-export function minutesToPromRange(minutes: number, stops: RangeStop[] = DEFAULT_STOPS): string {
-  const hit = stops.find((s) => s.value === minutes);
-  return hit ? hit.prom : `${minutes}m`;
-}
-
-

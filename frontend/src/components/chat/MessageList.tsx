@@ -14,6 +14,7 @@ import CortexLogo from '../../assets/cortex logo white.PNG';
 interface MessageListProps {
   messages: ChatMessage[];
   isStreaming: boolean;
+  onRetry?: () => void;
 }
 
 function formatMetrics(metrics: ChatMessage['metrics']): string {
@@ -31,15 +32,19 @@ function formatMetrics(metrics: ChatMessage['metrics']): string {
   return parts.join(' · ');
 }
 
-export function MessageList({ messages, isStreaming }: MessageListProps) {
+export function MessageList({ messages, isStreaming, onRetry }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Follow the stream only while the user is already at the bottom; never fight a manual scroll-up.
+  const onScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
   useEffect(() => {
-    if (endRef.current) {
-      endRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (stickToBottom.current) endRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
   }, [messages, isStreaming]);
 
   if (messages.length === 0) {
@@ -65,11 +70,12 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
   }
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-      {messages.map((message, index) => {
+    <div ref={containerRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4" role="log" aria-live="polite" aria-busy={isStreaming}>
+      {messages.map((message) => {
         const isUser = message.role === 'user';
-        const isLastAssistant = !isUser && index === messages.length - 1;
-        const showStreaming = isLastAssistant && isStreaming;
+        const showStreaming = message.status === 'streaming';
+        const failed = message.status === 'failed';
+        const cancelled = message.status === 'cancelled';
         
         return (
           <div
@@ -97,17 +103,25 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
               className={cn(
                 'max-w-[80%] rounded-2xl px-4 py-3',
                 isUser
-                  ? 'bg-teal-500/20 border border-teal-500/20 text-white'
-                  : 'bg-white/5 border border-white/5 text-white/90'
+                  ? cn('bg-teal-500/20 border border-teal-500/20 text-white', failed && 'border-red-500/40')
+                  : cn('bg-white/5 border border-white/5 text-white/90', cancelled && 'border-amber-500/30')
               )}
             >
               {isUser ? (
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                <>
+                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  {failed && (
+                    <div className="mt-2 pt-2 border-t border-red-500/20 text-[11px] text-red-300 flex items-center justify-between gap-3">
+                      <span>Not answered{message.error ? `: ${message.error}` : ''}</span>
+                      {onRetry && <button type="button" onClick={onRetry} className="underline underline-offset-2 hover:text-red-200">Retry</button>}
+                    </div>
+                  )}
+                </>
               ) : (
-                <MessageContent 
-                  content={message.content || (showStreaming ? '' : '[No response]')} 
-                  isStreaming={showStreaming}
-                />
+                <>
+                  <MessageContent content={message.content || (showStreaming ? '' : '(empty reply)')} isStreaming={showStreaming} />
+                  {cancelled && <div className="mt-2 text-[10px] text-amber-300/90 font-mono">stopped by you · not sent back to the model</div>}
+                </>
               )}
               
               {/* Metrics for assistant messages */}

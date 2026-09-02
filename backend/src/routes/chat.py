@@ -156,59 +156,49 @@ def _generate_title(messages: List[ChatMessageSchema]) -> str:
 # Endpoints
 # ============================================================================
 
-@router.get("/models/running", response_model=List[RunningModelInfo])
-async def list_running_models(
-    user: dict = Depends(require_user_session),
-    settings=Depends(get_settings)
-):
-    """List all currently running inference models.
-    
-    Returns minimal information needed for model selection in chat UI.
-    Only returns models that are currently healthy/running.
-    
-    Accessible by any authenticated user (not just admins).
+async def _running_models(include_embed: bool = False) -> List[RunningModelInfo]:
+    """Models that can serve requests right now.
+
+    The supervisor is the source of truth for managed models (DB state ``running``); static
+    upstreams from VLLM_GEN_URLS/VLLM_EMB_URLS have no DB row and are taken from the registry when
+    the health poller has seen them recently. Embedding models are excluded from the chat picker
+    unless ``include_embed`` is set.
     """
     import time
-    try:
-        running = []
-        registry_size = len(MODEL_REGISTRY) if MODEL_REGISTRY else 0
-        
-        for name, meta in (MODEL_REGISTRY or {}).items():
-            url = str((meta or {}).get("url") or "")
-            if not url:
-                logger.debug(f"Model {name} has no URL, skipping")
+    from ..models import Model
+    from sqlalchemy import select
+    settings = get_settings()
+    out: List[RunningModelInfo] = []
+    seen: set[str] = set()
+    SessionLocal = _get_session()
+    if SessionLocal is not None:
+        async with SessionLocal() as session:
+            rows = (await session.execute(select(Model).where(Model.state == "running", Model.archived == False))).scalars().all()  # noqa: E712
+        for m in rows:
+            if not m.served_model_name:
                 continue
-            
-            # Check health state
-            h = HEALTH_STATE.get(url) or {}
-            ok = bool(h.get("ok"))
-            ts = float(h.get("ts", 0.0))
-            age = time.time() - ts if ts > 0 else float('inf')
-            ttl = settings.HEALTH_CHECK_TTL_SEC
-            
-            if not ok:
-                logger.debug(f"Model {name} at {url} health check failed (ok={ok})")
-                continue
-            
-            if age > ttl:
-                logger.debug(f"Model {name} at {url} health data stale (age={age:.1f}s, ttl={ttl}s)")
-                continue
-            
-            task = str((meta or {}).get("task") or "generate")
-            engine_type = str((meta or {}).get("engine_type") or "vllm")
-            
-            running.append(RunningModelInfo(
-                served_model_name=name,
-                task=task,
-                engine_type=engine_type,
-                state="running"
-            ))
-        
-        logger.debug(f"list_running_models: {len(running)}/{registry_size} models healthy")
-        return running
-    except Exception as e:
-        logger.error(f"Error listing running models: {e}")
-        return []
+            seen.add(m.served_model_name)
+            out.append(RunningModelInfo(served_model_name=m.served_model_name, task=m.task or "generate",
+                                        engine_type=m.engine_type or "vllm", state="running"))
+    for name, meta in (MODEL_REGISTRY or {}).items():
+        if name in seen:
+            continue
+        url = str((meta or {}).get("url") or "")
+        h = HEALTH_STATE.get(url) or {}
+        if not url or not h.get("ok") or time.time() - float(h.get("ts", 0.0)) > settings.HEALTH_CHECK_TTL_SEC:
+            continue
+        out.append(RunningModelInfo(served_model_name=name, task=str((meta or {}).get("task") or "generate"),
+                                    engine_type=str((meta or {}).get("engine_type") or "vllm"), state="running"))
+    if not include_embed:
+        out = [m for m in out if not (m.task or "").lower().startswith("embed")]
+    return sorted(out, key=lambda m: m.served_model_name.lower())
+
+
+@router.get("/models/running", response_model=List[RunningModelInfo])
+async def list_running_models(include_embed: bool = False, user: dict = Depends(require_user_session)):
+    """Models available to chat with (running, non-embedding unless ``include_embed``).
+    Accessible by any authenticated user."""
+    return await _running_models(include_embed=include_embed)
 
 
 @router.get("/models/{model_name}/constraints", response_model=ModelConstraints)
@@ -230,20 +220,10 @@ async def get_model_constraints(
     from ..models import Model
     from sqlalchemy import select
     
-    # First check if model is in registry (running)
-    meta = MODEL_REGISTRY.get(model_name)
-    if not meta:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Model '{model_name}' not found or not running"
-        )
-    
-    url = str(meta.get("url") or "")
-    if not url or not _is_model_healthy(url, settings):
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Model '{model_name}' is not currently running"
-        )
+    running = {m.served_model_name for m in await _running_models(include_embed=True)}
+    meta = MODEL_REGISTRY.get(model_name) or {}
+    if model_name not in running:
+        raise HTTPException(status_code=404, detail=f"Model '{model_name}' is not currently running")
     
     # Get full model info from database
     SessionLocal = _get_session()
@@ -325,21 +305,21 @@ async def list_chat_sessions(user: dict = Depends(require_user_session)):
             .order_by(ChatSession.created_at.desc())
         )
         sessions = result.scalars().all()
+        from sqlalchemy import func as _func
+        counts = dict((await session.execute(
+            select(ChatMessage.session_id, _func.count(ChatMessage.id))
+            .where(ChatMessage.session_id.in_([s.id for s in sessions] or [""]))
+            .group_by(ChatMessage.session_id)
+        )).all())
         
         summaries = []
         for s in sessions:
-            # Count messages for this session
-            msg_result = await session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == s.id)
-            )
-            messages = msg_result.scalars().all()
-            
             summaries.append(ChatSessionSummary(
                 id=s.id,
                 title=s.title,
                 model_name=s.model_name,
                 engine_type=s.engine_type,
-                message_count=len(messages),
+                message_count=int(counts.get(s.id, 0)),
                 created_at=int(s.created_at.timestamp() * 1000),
                 updated_at=int(s.updated_at.timestamp() * 1000),
             ))
@@ -367,6 +347,12 @@ async def create_chat_session(
     
     session_id = str(uuid.uuid4())
     now = datetime.utcnow()
+    # the engine is a property of the model, not something the client should have to know
+    engine_type = req.engine_type
+    known = {m.served_model_name: m.engine_type for m in await _running_models(include_embed=True)}
+    if req.model_name in known:
+        engine_type = known[req.model_name] or engine_type
+    req.engine_type = engine_type
     
     try:
         async with SessionLocal() as session:

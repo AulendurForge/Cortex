@@ -1,6 +1,6 @@
 'use client';
 
-import { Card, Button } from '../src/components/UI';
+import { Card, Button } from '@/components/UI';
 
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (

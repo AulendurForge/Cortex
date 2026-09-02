@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Card, SectionTitle, InfoBox, Badge, Button } from '../../../../../src/components/UI';
-import { cn } from '../../../../../src/lib/cn';
+import { Card, SectionTitle, InfoBox, Badge, Button } from '@/components/UI';
+import { cn } from '@/lib/cn';
+import { Attribution } from '../Attribution';
 
 export default function ModelOperations() {
   return (
@@ -21,19 +22,22 @@ export default function ModelOperations() {
         <SectionTitle variant="cyan" className="text-[10px]">Model Lifecycle</SectionTitle>
         <Card className="p-4 bg-white/[0.02] border-white/5">
           <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] py-4">
-            <LifecycleStep state="Down" color="neutral" desc="Not running" />
+            <LifecycleStep state="stopped" color="neutral" desc="Not running" />
             <Arrow />
-            <LifecycleStep state="Starting" color="amber" desc="Container init" />
+            <LifecycleStep state="starting" color="amber" desc="Container init" />
             <Arrow />
-            <LifecycleStep state="Loading" color="cyan" desc="Loading weights" />
+            <LifecycleStep state="loading" color="cyan" desc="Loading weights" />
             <Arrow />
-            <LifecycleStep state="Running" color="emerald" desc="Ready for requests" />
+            <LifecycleStep state="running" color="emerald" desc="Ready for requests" />
           </div>
           <div className="mt-2 flex items-center justify-center gap-3 text-[11px]">
             <span className="text-white/30">or</span>
-            <LifecycleStep state="Failed" color="red" desc="Error occurred" />
+            <LifecycleStep state="failed" color="red" desc="Error occurred" />
             <span className="text-white/30">→ check logs</span>
           </div>
+          <p className="text-center text-[10px] text-white/50 mt-3">
+            Stopping passes through <code>stopping</code> back to <code>stopped</code>. While a model is loading, the Stop button reads <strong>Cancel</strong>.
+          </p>
         </Card>
       </section>
 
@@ -45,7 +49,7 @@ export default function ModelOperations() {
             icon="▶️"
             title="Start"
             description="Launch the model container and begin loading weights into GPU memory"
-            when="Model is Down or Failed"
+            when="Model is stopped or failed"
             effect="Creates Docker container, mounts model files, starts inference engine"
             color="emerald"
           />
@@ -53,15 +57,15 @@ export default function ModelOperations() {
             icon="⏹️"
             title="Stop"
             description="Gracefully shut down the model container and release GPU resources"
-            when="Model is Running or Loading"
-            effect="Stops container, frees VRAM—model returns to Down state"
+            when="Model is starting or running"
+            effect="Stops the container and frees VRAM; the model returns to stopped"
             color="red"
           />
           <ActionCard 
             icon="❌"
             title="Cancel"
             description="Abort a model that's taking too long to load"
-            when="Model is Loading"
+            when="Model is loading (the Stop button reads Cancel)"
             effect="Same as Stop—terminates the loading process"
             color="amber"
           />
@@ -86,7 +90,7 @@ export default function ModelOperations() {
             title="Config"
             description="Edit model configuration settings"
             when="Any state"
-            effect="Opens the configuration wizard. Save & Apply stores the settings and restarts a running model; a stopped model keeps them for its next start. Request defaults never need a restart."
+            effect="Opens the configuration wizard. Save & Apply stores the settings and restarts a running model; a stopped model keeps them for its next start."
             color="purple"
           />
           <ActionCard 
@@ -94,15 +98,15 @@ export default function ModelOperations() {
             title="Recipe"
             description="Save current configuration as a reusable recipe"
             when="Any state"
-            effect="Creates a named recipe you can apply to new models"
+            effect="Opens the Blueprint Generation dialog; the saved recipe can be loaded into the Add Model form later"
             color="purple"
           />
           <ActionCard 
             icon="📦"
             title="Archive"
             description="Move model to vaulted configurations (hidden but preserved)"
-            when="Any state"
-            effect="Model disappears from main table, appears in Vaulted section"
+            when="Model is stopped or failed (the button is disabled while it runs)"
+            effect="Model disappears from the main table and appears under Vaulted Configurations"
             color="amber"
           />
           <ActionCard 
@@ -110,7 +114,7 @@ export default function ModelOperations() {
             title="Delete"
             description="Permanently remove model configuration"
             when="Model is Archived"
-            effect="Configuration deleted; model files on disk are preserved"
+            effect="Configuration and any recipes saved from it are deleted; model files on disk are preserved"
             color="red"
           />
         </div>
@@ -170,23 +174,23 @@ export default function ModelOperations() {
               <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">What to Look For</div>
               <ul className="text-[11px] text-white/70 space-y-2">
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span><strong>Startup messages:</strong> Engine version, model path, GPU detection</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span><strong>Loading progress:</strong> Layer loading, memory allocation</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-emerald-400" aria-hidden="true">✓</span>
                   <span><strong>"Model loaded" or "Ready":</strong> Confirms successful startup</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span><strong>Error messages:</strong> CUDA errors, OOM, path not found</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-red-400">!</span>
+                  <span className="text-red-400" aria-hidden="true">!</span>
                   <span><strong>Warnings:</strong> Compatibility issues, suboptimal settings</span>
                 </li>
               </ul>
@@ -223,7 +227,7 @@ export default function ModelOperations() {
             <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider mb-2">Diagnostic Banner</div>
             <p className="text-[10px] text-white/60 leading-relaxed">
               When viewing logs for a failed model, Cortex shows a diagnostic banner at the top with 
-              AI-assisted analysis of the error. This provides actionable suggestions for common issues 
+              a diagnosis produced by matching the log tail against a table of known error patterns. It provides actionable suggestions for common issues 
               like CUDA version mismatches, path errors, and OOM conditions.
             </p>
           </div>
@@ -243,7 +247,7 @@ export default function ModelOperations() {
               <div className="text-[10px] font-bold text-cyan-300">For Generate (Chat) Models</div>
               <p className="text-[10px] text-white/60 leading-relaxed">
                 Sends a simple chat completion request with a brief prompt. Validates that the model 
-                generates text and reports latency metrics.
+                generates text and reports the round-trip latency.
               </p>
             </div>
             <div className="p-3 bg-black/30 rounded-lg border border-white/10 space-y-2">
@@ -259,19 +263,19 @@ export default function ModelOperations() {
             <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Test Results Show</div>
             <ul className="text-[11px] text-white/70 space-y-1.5">
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">•</span>
+                <span className="text-cyan-400" aria-hidden="true">•</span>
                 <span><strong>Success/Failure status</strong></span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">•</span>
-                <span><strong>Response latency</strong> (time to first token, total time)</span>
+                <span className="text-cyan-400" aria-hidden="true">•</span>
+                <span><strong>Round-trip latency</strong> of the test request (no time-to-first-token)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">•</span>
-                <span><strong>Token counts</strong> (prompt tokens, completion tokens)</span>
+                <span className="text-cyan-400" aria-hidden="true">•</span>
+                <span><strong>Token usage</strong> (prompt / completion / total) when the engine&apos;s response includes it</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-cyan-400">•</span>
+                <span className="text-cyan-400" aria-hidden="true">•</span>
                 <span><strong>Sample output</strong> (truncated for display)</span>
               </li>
             </ul>
@@ -290,7 +294,7 @@ export default function ModelOperations() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4 bg-amber-500/5 border-amber-500/20 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xl">📦</span>
+              <span className="text-xl" aria-hidden="true">📦</span>
               <div className="text-[12px] font-bold text-amber-300 uppercase tracking-wider">Archiving</div>
             </div>
             <p className="text-[11px] text-white/70 leading-relaxed">
@@ -299,15 +303,15 @@ export default function ModelOperations() {
             </p>
             <ul className="text-[11px] text-white/70 space-y-1.5">
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">•</span>
+                <span className="text-amber-400" aria-hidden="true">•</span>
                 <span>Use for models you're not currently using but may need later</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">•</span>
-                <span>Archived models can still have their logs viewed</span>
+                <span className="text-amber-400" aria-hidden="true">•</span>
+                <span>Only stopped or failed models can be archived; archived models can still show their logs and be deleted from the vault</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-amber-400">•</span>
+                <span className="text-amber-400" aria-hidden="true">•</span>
                 <span>Helps keep the main table focused on active deployments</span>
               </li>
             </ul>
@@ -315,7 +319,7 @@ export default function ModelOperations() {
 
           <Card className="p-4 bg-red-500/5 border-red-500/20 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xl">🗑️</span>
+              <span className="text-xl" aria-hidden="true">🗑️</span>
               <div className="text-[12px] font-bold text-red-300 uppercase tracking-wider">Deleting</div>
             </div>
             <p className="text-[11px] text-white/70 leading-relaxed">
@@ -324,15 +328,15 @@ export default function ModelOperations() {
             </p>
             <ul className="text-[11px] text-white/70 space-y-1.5">
               <li className="flex items-start gap-2">
-                <span className="text-red-400">•</span>
-                <span>Configuration is permanently removed from the database</span>
+                <span className="text-red-400" aria-hidden="true">•</span>
+                <span>Configuration and any recipes saved from this model are permanently removed</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
+                <span className="text-emerald-400" aria-hidden="true">✓</span>
                 <span><strong>Model files on disk are preserved</strong>—Cortex never deletes your weights</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-red-400">•</span>
+                <span className="text-red-400" aria-hidden="true">•</span>
                 <span>To restore, you must add the model again from scratch</span>
               </li>
             </ul>
@@ -357,19 +361,19 @@ export default function ModelOperations() {
             <div className="text-[10px] font-bold text-white/50 uppercase tracking-wider">What You Can Change</div>
             <ul className="text-[11px] text-white/70 space-y-1.5">
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span>GPU allocation (add/remove GPUs)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span>Context length, batch sizes, memory utilization</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span>Request defaults (temperature, penalties, etc.)</span>
               </li>
               <li className="flex items-start gap-2">
-                <span className="text-purple-400">•</span>
+                <span className="text-purple-400" aria-hidden="true">•</span>
                 <span>Custom startup arguments and environment variables</span>
               </li>
             </ul>
@@ -396,9 +400,7 @@ export default function ModelOperations() {
         </Link>
       </div>
 
-      <div className="text-[9px] text-white/20 uppercase font-black tracking-[0.3em] text-center pt-4 border-t border-white/5">
-        Cortex Model Operations Guide • <a href="https://www.aulendur.com" target="_blank" rel="noopener noreferrer" className="hover:text-white/40 hover:underline transition-colors">Aulendur Labs</a>
-      </div>
+      <Attribution label="Cortex Model Operations Guide" />
     </section>
   );
 }
@@ -421,7 +423,7 @@ function LifecycleStep({ state, color, desc }: { state: string; color: string; d
 }
 
 function Arrow() {
-  return <span className="text-white/30 text-lg">→</span>;
+  return <span className="text-white/30 text-lg" aria-hidden="true">→</span>;
 }
 
 function ActionCard({ 
@@ -450,7 +452,7 @@ function ActionCard({
   return (
     <Card className={cn("p-4 bg-white/[0.02] border-white/5 transition-all duration-300", colors[color])}>
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-lg">{icon}</span>
+        <span className="text-lg" aria-hidden="true">{icon}</span>
         <span className="text-[12px] font-bold text-white uppercase tracking-wider">{title}</span>
       </div>
       <p className="text-[11px] text-white/70 leading-relaxed mb-2">{description}</p>
