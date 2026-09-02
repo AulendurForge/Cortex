@@ -409,7 +409,10 @@ build-offline: ## Rebuild gateway + frontend from source WITHOUT network, on top
 	@docker image inspect cortex-frontend-deps:$(CORTEX_VERSION) >/dev/null 2>&1 || { echo "cortex-frontend-deps:$(CORTEX_VERSION) missing: import a program bundle first (make import-bundle BUNDLE=...)"; exit 1; }
 	docker build --network none --build-arg DEPS_IMAGE=cortex-gateway-deps:$(CORTEX_VERSION) -f backend/Dockerfile.offline -t cortex-gateway:$(CORTEX_VERSION) backend
 	docker build --network none --build-arg DEPS_IMAGE=cortex-frontend-deps:$(CORTEX_VERSION) --build-arg NODE_IMAGE=$(NODE_IMAGE) -f frontend/Dockerfile.offline -t cortex-frontend:$(CORTEX_VERSION) frontend
-	@if [ "$(ENV)" = "dev" ]; then docker tag cortex-gateway:$(CORTEX_VERSION) cortex-gateway:dev; docker tag cortex-frontend:$(CORTEX_VERSION) cortex-frontend:dev; fi
+	@if [ "$(ENV)" = "dev" ]; then \
+		docker tag cortex-gateway:$(CORTEX_VERSION) cortex-gateway:dev; \
+		docker build --network none --build-arg DEPS_IMAGE=cortex-frontend-deps:$(CORTEX_VERSION) --build-arg NODE_IMAGE=$(NODE_IMAGE) --target dev -f frontend/Dockerfile.offline -t cortex-frontend:dev frontend; \
+	fi
 	@echo "$(COLOR_GREEN)✓ rebuilt offline: cortex-gateway:$(CORTEX_VERSION), cortex-frontend:$(CORTEX_VERSION)$(COLOR_RESET)  (restart: make up)"
 
 prepare-offline: ## Build the program bundle (all pinned images + Cortex + deps images + wheels) in cortex-offline-bundle/

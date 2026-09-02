@@ -150,3 +150,19 @@ alias (139 imports), ESLint (`next/core-web-vitals`) wired into `npm run lint`, 
 `.dockerignore` files, dead files/images removed, phantom animation classes stripped, scrollbar classes defined,
 Prism light build. 84 vitest tests, typecheck and lint clean. Verified in the browser against the live gateway
 (login redirect, playground with a llama.cpp model, usage attribution, health/system/keys/users pages).
+
+### 2026-09-02 — Phase 3 (splits) and Phase 4 (guide as data) done
+- Backend `routes/admin.py` split into `admin_system`, `admin_usage`, `admin_upstreams`, `admin_model_metrics`
+  (+ `_admin_common`); route table and response shapes verified identical; new `/admin/system/about`.
+- Model-form modules split into data + small components (`SpeculativeDecodingExplainer` 451→134 lines on the
+  shared `Modal`, `GGUFGroupSelector` 379→153, `fields` → `fields/*`, calculator `autoFit` in `model-math` with
+  tests, `LogsViewer` → `logHighlight` + `useLogPoller`, `ArchitectureCompatibility` table extracted); 19 unused
+  exports removed; ARIA tab/panel nesting fixed; `Tabs` gained arrow-key navigation and an unknown-id fallback.
+- Guide: `src/guide/` holds typed content blocks, fact interpolation from `/admin/system/about` (gateway URL,
+  host, paths, pinned images, version, ports), accessible primitives (real headings, one copy button, tables
+  with captions, ≥12 px body text) and a renderer. Every tab is now data (`content/*.ts`, 2,875 lines replacing
+  ~7,400 lines of TSX); the per-flag configuration reference is generated from the engine spec at render time;
+  tests enforce existing make targets, pinned image tags, no stale phrases, no hardcoded ports/paths/LAN IPs,
+  unique section ids and known custom blocks. `frontend/app/(admin)/guide/sections/` is gone.
+- Ops fix found on the way: `make build-offline ENV=dev` retagged the production image as the dev image; the
+  dev tag now comes from a `dev` stage in `Dockerfile.offline`.

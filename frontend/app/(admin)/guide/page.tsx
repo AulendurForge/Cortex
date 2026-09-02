@@ -3,15 +3,10 @@
 import { Tabs } from '@/components/Tabs';
 import { Suspense } from 'react';
 import { GuideRenderer } from '@/guide/GuideRenderer';
-import { aboutTab } from '@/guide/content';
+import { aboutTab, apiKeysTab, usageTab, chatTab, transferTab, usersOrgsTab } from '@/guide/content';
 
 import GettingStartedTab from './GettingStartedTab';
-import ManageModels from './sections/ManageModels';
-import ApiKeys from './sections/ApiKeys';
-import AboutUsage from './sections/AboutUsage';
-import ManageUsersOrgs from './sections/ManageUsersOrgs';
-import ChatPlayground from './sections/ChatPlayground';
-import DeploymentMigration from './sections/DeploymentMigration';
+import ManageModelsTab from './ManageModelsTab';
 
 /**
  * Guide tabs. Getting Started and About Cortex are content-as-data (src/guide/content) rendered
@@ -27,12 +22,12 @@ export default function GuidePage() {
           defaultId="getting-started"
           tabs={[
             { id: 'getting-started', label: '🚀 Getting Started', content: <GettingStartedTab /> },
-            { id: 'manage-models', label: '🤖 Manage Models', content: <ManageModels /> },
-            { id: 'api-keys', label: '🔑 API Keys', content: <ApiKeys /> },
-            { id: 'about-usage', label: '📊 Usage Analytics', content: <AboutUsage /> },
-            { id: 'manage-users-orgs', label: '👥 Users & Orgs', content: <ManageUsersOrgs /> },
-            { id: 'chat-playground', label: '💬 Chat', content: <ChatPlayground /> },
-            { id: 'deployment-migration', label: '📦 Transfer', content: <DeploymentMigration /> },
+            { id: 'manage-models', label: '🤖 Manage Models', content: <ManageModelsTab /> },
+            { id: 'api-keys', label: '🔑 API Keys', content: <GuideRenderer tab={apiKeysTab} /> },
+            { id: 'about-usage', label: '📊 Usage Analytics', content: <GuideRenderer tab={usageTab} /> },
+            { id: 'manage-users-orgs', label: '👥 Users & Orgs', content: <GuideRenderer tab={usersOrgsTab} /> },
+            { id: 'chat-playground', label: '💬 Chat', content: <GuideRenderer tab={chatTab} /> },
+            { id: 'deployment-migration', label: '📦 Transfer', content: <GuideRenderer tab={transferTab} /> },
             { id: 'about-cortex', label: '🧠 About Cortex', content: <GuideRenderer tab={aboutTab} /> },
           ]}
         />

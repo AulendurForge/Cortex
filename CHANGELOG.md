@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Foundation**: `ApiError` + `errMsg`, shared formatters, `@/` alias, ESLint in `npm run lint`/CI,
   `output: 'standalone'` with security headers and slim production images, `.dockerignore`, dead code and
   3 MB of unused images removed, Modal focus fix, hydration-safe Accordion, corrected LineChart geometry.
+- **Guide as data**: every guide tab is typed content rendered by shared primitives with facts interpolated
+  from `/admin/system/about`; the configuration flag reference is generated from the engine spec; tests reject
+  stale phrases, unknown make targets and unpinned image tags. `routes/admin.py` split into four modules; large
+  model-form modules split into data + components.
 - **Guide**: 46 stale statements corrected (key format/hashing, statuses, driver table, feature claims,
   GPT-OSS on vLLM, admin credentials), About page rewritten with version/pinned images/links and an accurate
   Aulendur Labs description, "Users & Orgs" section written, a vitest guardrail rejects known-stale phrases,

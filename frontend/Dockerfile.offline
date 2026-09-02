@@ -5,6 +5,13 @@
 ARG DEPS_IMAGE=cortex-frontend-deps:dev
 ARG NODE_IMAGE=node:22-alpine
 
+# dev target: hot-reload server for docker.compose.dev.yaml (source is bind-mounted over /app)
+FROM ${DEPS_IMAGE} AS dev
+WORKDIR /app
+COPY . .
+EXPOSE 3001
+CMD ["npm", "run", "dev"]
+
 FROM ${DEPS_IMAGE} AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1

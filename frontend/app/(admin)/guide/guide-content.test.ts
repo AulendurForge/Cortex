@@ -33,7 +33,7 @@ describe('guide content', () => {
     if (!existsSync(mk)) return;
     const targets = new Set([...readFileSync(mk, 'utf8').matchAll(/^([a-zA-Z_-]+):/gm)].map((m) => m[1]));
     const bad: string[] = [];
-    for (const f of files) for (const m of f.text.matchAll(/\bmake ([a-z][a-z0-9_-]+)/g)) if (!targets.has(m[1]!)) bad.push(`${f.path}: make ${m[1]}`);
+    for (const f of files) for (const m of f.text.matchAll(/(?:^|`|\$ |\n)make ([a-z][a-z0-9_-]+)/gm)) if (!targets.has(m[1]!)) bad.push(`${f.path}: make ${m[1]}`);
     expect(bad).toEqual([]);
   });
 

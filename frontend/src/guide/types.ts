@@ -19,7 +19,8 @@ export type StepItem = {
 
 export type CardItem = { title: string; md: Md; icon?: string };
 export type LinkCardItem = { title: string; md: Md; href: string; label?: string };
-export type IssueItem = { title: string; causes: Md[]; solutions: Md[] };
+/** Troubleshooting entry; `symptoms` (optional) is shown as a third column before the causes. */
+export type IssueItem = { title: string; symptoms?: Md[]; causes: Md[]; solutions: Md[] };
 
 export type CalloutVariant = 'info' | 'warning' | 'success' | 'error';
 

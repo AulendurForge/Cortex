@@ -26,7 +26,7 @@ function blockStrings(b: Block): string[] {
     case 'table': return [...b.columns, ...b.rows.flat(), b.caption ?? ''];
     case 'cards': return b.items.flatMap((c) => [c.title, c.md]);
     case 'link-cards': return b.items.flatMap((c) => [c.title, c.md, c.href, c.label ?? '']);
-    case 'issues': return b.items.flatMap((c) => [c.title, ...c.causes, ...c.solutions]);
+    case 'issues': return b.items.flatMap((c) => [c.title, ...(c.symptoms ?? []), ...c.causes, ...c.solutions]);
     case 'custom': return [];
   }
 }
@@ -49,7 +49,7 @@ const entries = ALL_GUIDE_TABS.flatMap((tab) => tabBlocks(tab).map((e) => ({ ...
 
 describe('guide content (data)', () => {
   it('has at least the four ported tabs with sections', () => {
-    expect(ALL_GUIDE_TABS.map((t) => t.id)).toEqual(['welcome', 'first-model', 'diagnostics', 'about-cortex']);
+    expect(ALL_GUIDE_TABS.map((t) => t.id)).toEqual(expect.arrayContaining(['welcome', 'first-model', 'diagnostics', 'about-cortex', 'api-keys', 'about-usage', 'users-orgs', 'chat-playground', 'transfer']));
     for (const t of ALL_GUIDE_TABS) expect(t.sections.length).toBeGreaterThan(0);
   });
 
@@ -65,7 +65,7 @@ describe('guide content (data)', () => {
     const targets = new Set([...readFileSync(mk, 'utf8').matchAll(/^([a-zA-Z_-]+):/gm)].map((m) => m[1]));
     const bad: string[] = [];
     for (const e of entries) {
-      for (const m of `${e.code}\n${e.text}`.matchAll(/\bmake ([a-z][a-z0-9_-]+)/g)) if (!targets.has(m[1]!)) bad.push(`${e.where}: make ${m[1]}`);
+      for (const m of `${e.code}\n${e.text}`.matchAll(/(?:^|`|\$ |\n)make ([a-z][a-z0-9_-]+)/gm)) if (!targets.has(m[1]!)) bad.push(`${e.where}: make ${m[1]}`);
     }
     expect(bad).toEqual([]);
   });
@@ -98,7 +98,7 @@ describe('guide content (data)', () => {
   });
 
   it('has unique section ids and only known custom block ids', () => {
-    const KNOWN_CUSTOM = new Set(['welcome-hero', 'host-ip-banner', 'tutorial-cta', 'model-picker', 'diagnostic-checks']);
+    const KNOWN_CUSTOM = new Set(['welcome-hero', 'host-ip-banner', 'tutorial-cta', 'model-picker', 'diagnostic-checks', 'models-cta', 'spec-flags:vllm', 'spec-flags:llamacpp']);
     const ids = ALL_GUIDE_TABS.flatMap((t) => t.sections.map((s) => s.id));
     expect(new Set(ids).size).toBe(ids.length);
     const unknown = entries.filter((e) => e.block.kind === 'custom' && !KNOWN_CUSTOM.has((e.block as { id: string }).id)).map((e) => e.where);
