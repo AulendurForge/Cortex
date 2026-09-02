@@ -39,7 +39,7 @@ function GGUFValidationBadge({ validation }: { validation: GGUFValidationSummary
   );
 }
 
-export interface OfflineModeFieldsProps {
+interface OfflineModeFieldsProps {
   baseDir: string;
   folders: string[];
   foldersLoading: boolean;

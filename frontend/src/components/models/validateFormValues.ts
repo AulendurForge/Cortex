@@ -14,7 +14,7 @@ export type Issue = {
   fix?: string;
 };
 
-export type ValidationContext = {
+type ValidationContext = {
   /** 'add' checks source fields; 'configure' assumes identity is immutable. */
   mode: 'add' | 'configure';
   gpuCount?: number;

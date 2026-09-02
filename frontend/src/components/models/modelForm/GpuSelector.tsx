@@ -26,7 +26,7 @@ const HARD_MAX = 16;
  * than the highest GPU already selected (so a saved multi-GPU configuration
  * stays visible even when Prometheus/NVML is unavailable).
  */
-export function visibleGpuSlots(gpuInfo: GpuInfo[] | undefined, selected: number[], hint?: number): number {
+function visibleGpuSlots(gpuInfo: GpuInfo[] | undefined, selected: number[], hint?: number): number {
   const discovered = gpuInfo && gpuInfo.length > 0 ? Math.max(...gpuInfo.map(g => g.index + 1), gpuInfo.length) : 0;
   const highestSelected = selected.length > 0 ? Math.max(...selected) + 1 : 0;
   return Math.max(1, discovered, highestSelected, hint || 0);

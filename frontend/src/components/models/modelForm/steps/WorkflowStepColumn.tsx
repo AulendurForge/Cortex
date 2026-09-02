@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { cn } from '../../../../lib/cn';
+import { cn } from '@/lib/cn';
 import type { StepConfig } from './types';
 
 function getGemBg(hex: string, active: boolean, disabled: boolean) {
@@ -15,6 +15,8 @@ function getGemBg(hex: string, active: boolean, disabled: boolean) {
 /**
  * One accordion column of the workflow.  Columns behave as tabs: keyboard
  * reachable, Enter/Space activate, aria-selected/aria-disabled announced.
+ * The tab element and its tabpanel are siblings (a tabpanel must never be
+ * nested inside its tab); when the column is collapsed the tab fills it.
  */
 export function WorkflowStepColumn({
   step,
@@ -38,37 +40,49 @@ export function WorkflowStepColumn({
   const panelId = `workflow-step-${step.type}`;
   return (
     <div
-      role="tab"
-      id={`${panelId}-tab`}
-      aria-selected={isActive}
-      aria-disabled={isDisabled}
-      aria-controls={panelId}
-      tabIndex={isDisabled ? -1 : 0}
       className={cn(
-        'relative transition-all duration-500 ease-in-out border-r border-white/5 flex flex-col focus:outline-none',
-        isActive ? 'flex-[10] opacity-100' : 'flex-1 cursor-pointer hover:opacity-100 focus-visible:ring-2 focus-visible:ring-cyan-400/60',
-        isDisabled ? 'cursor-not-allowed opacity-40' : 'opacity-80',
+        'relative transition-all duration-500 ease-in-out border-r border-white/5 flex flex-col',
+        isActive ? 'flex-[10] opacity-100' : 'flex-1 hover:opacity-100',
+        isDisabled ? 'opacity-40' : 'opacity-80',
       )}
       style={{ backgroundColor: getGemBg(step.gemColor, isActive, isDisabled), borderLeft: isActive ? `4px solid ${step.gemColor}` : 'none' }}
-      onClick={() => !isDisabled && !isActive && onSelect()}
-      onKeyDown={(e) => {
-        if (isDisabled || isActive) return;
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); }
-      }}
     >
-      {!isActive && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center p-2 h-full w-full pointer-events-none overflow-hidden">
-          <div className="rotate-180 flex flex-col items-center gap-6" style={{ writingMode: 'vertical-rl' }}>
-            <span className="text-sm font-black uppercase tracking-[0.2em] whitespace-nowrap" style={{ color: isDisabled ? 'rgba(255,255,255,0.3)' : step.gemColor }}>
-              Step 0{idx + 1}
-            </span>
-            <span className={cn('text-xl font-extrabold whitespace-nowrap drop-shadow-sm', isDisabled ? 'text-white/40' : 'text-white')}>
-              {step.title}
-            </span>
-          </div>
-          {isPast && <div className="mt-6 text-emerald-400 font-bold text-xl" aria-label="completed">✓</div>}
-        </div>
-      )}
+      <div
+        role="tab"
+        id={`${panelId}-tab`}
+        aria-selected={isActive}
+        aria-disabled={isDisabled}
+        aria-controls={panelId}
+        tabIndex={isDisabled ? -1 : 0}
+        className={cn(
+          'focus:outline-none',
+          isActive
+            ? 'sr-only'
+            : 'absolute inset-0 flex flex-col items-center justify-center p-2 h-full w-full overflow-hidden focus-visible:ring-2 focus-visible:ring-cyan-400/60',
+          isDisabled ? 'cursor-not-allowed' : !isActive && 'cursor-pointer',
+        )}
+        onClick={() => !isDisabled && !isActive && onSelect()}
+        onKeyDown={(e) => {
+          if (isDisabled || isActive) return;
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); }
+        }}
+      >
+        {isActive ? (
+          <>Step 0{idx + 1} {step.title}</>
+        ) : (
+          <>
+            <div className="rotate-180 flex flex-col items-center gap-6" style={{ writingMode: 'vertical-rl' }}>
+              <span className="text-sm font-black uppercase tracking-[0.2em] whitespace-nowrap" style={{ color: isDisabled ? 'rgba(255,255,255,0.3)' : step.gemColor }}>
+                Step 0{idx + 1}
+              </span>
+              <span className={cn('text-xl font-extrabold whitespace-nowrap drop-shadow-sm', isDisabled ? 'text-white/40' : 'text-white')}>
+                {step.title}
+              </span>
+            </div>
+            {isPast && <div className="mt-6 text-emerald-400 font-bold text-xl" aria-label="completed">✓</div>}
+          </>
+        )}
+      </div>
 
       {isActive && (
         <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab`} className="p-4 overflow-y-auto h-full flex flex-col relative custom-scrollbar" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>

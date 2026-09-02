@@ -170,7 +170,7 @@ export function analyzeCustomEnv(env: CustomEnvVar[], engine: EngineType, spec: 
   return issues;
 }
 
-export type CustomPreset = {
+type CustomPreset = {
   id: string;
   engine: EngineType;
   label: string;

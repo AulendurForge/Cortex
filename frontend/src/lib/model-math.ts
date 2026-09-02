@@ -145,3 +145,93 @@ export function clamp(min: number, v: number, max: number): number {
 }
 
 
+/** Preset model shapes offered by the resource calculator ("Custom" is the caller's own meta). */
+export const MODEL_PRESETS: ReadonlyArray<{ id: string; label: string; meta: ModelMeta }> = [
+  { id: '7b', label: 'Generic 7B', meta: { paramsB: 7, hiddenSize: 4096, numLayers: 32 } },
+  { id: '8b', label: 'Llama‑3‑8B', meta: { paramsB: 8, hiddenSize: 4096, numLayers: 32 } },
+  { id: '13b', label: 'Generic 13B', meta: { paramsB: 13, hiddenSize: 5120, numLayers: 40 } },
+  { id: '20b', label: 'Generic 20B', meta: { paramsB: 20, hiddenSize: 6144, numLayers: 44 } },
+  { id: '70b', label: 'Llama‑3‑70B', meta: { paramsB: 70, hiddenSize: 8192, numLayers: 80 } },
+];
+
+export type AutoFitResult = {
+  choices: Choices;
+  work: Workload;
+  /** GiB of CPU offload suggested when nothing else made the model fit (0 otherwise). */
+  cpuOffloadGb: number;
+  /** Human-readable list of the adjustments applied, in order. */
+  notes: string[];
+};
+
+/**
+ * Walk a fixed ladder of adjustments (fp8 KV cache → FP8 weights → 4-bit weights → more TP →
+ * fewer batched tokens → fewer active tokens → fewer sequences → shorter context) until the
+ * projection fits every selected GPU, then fall back to suggesting CPU offload. Pure: returns
+ * new objects and never mutates its inputs.
+ */
+export function autoFit(meta: ModelMeta, work: Workload, choices: Choices, hw: HardwareSnapshot): AutoFitResult {
+  const c: Choices = { ...choices };
+  const w: Workload = { ...work };
+  const notes: string[] = [];
+  const tryFits = () => {
+    const br = breakdownMemory(meta, w, c, hw);
+    return { ok: br.perGpu.every((p) => p.fits), br };
+  };
+  let check = tryFits();
+  if (!check.ok && (!c.kvCacheDtype || !String(c.kvCacheDtype).startsWith('fp8'))) {
+    c.kvCacheDtype = 'fp8';
+    notes.push('Set kv_cache_dtype=fp8');
+    check = tryFits();
+  }
+  if (!check.ok && !c.quantization) {
+    c.quantization = 'fp8';
+    notes.push('Use FP8 quantization');
+    check = tryFits();
+  }
+  if (!check.ok && c.quantization !== 'awq' && c.quantization !== 'gptq') {
+    c.quantization = 'awq';
+    notes.push('Switch to 4-bit (awq)');
+    check = tryFits();
+  }
+  if (!check.ok && hw.gpuCount > c.tpSize) {
+    for (let t = c.tpSize + 1; t <= hw.gpuCount; t++) {
+      c.tpSize = t;
+      notes.push(`Increase TP to ${t}`);
+      check = tryFits();
+      if (check.ok) break;
+    }
+  }
+  if (!check.ok) {
+    for (const t of [2048, 1024, 768]) {
+      if (check.ok) break;
+      const cur = w.maxBatchedTokens ?? 4096;
+      if (cur > t) {
+        w.maxBatchedTokens = t;
+        notes.push(`Reduce batched tokens to ${t}`);
+        check = tryFits();
+      }
+    }
+  }
+  if (!check.ok && (w.avgActiveTokens ?? 2048) > 1024) {
+    w.avgActiveTokens = Math.max(512, Math.floor((w.avgActiveTokens ?? 2048) / 2));
+    notes.push(`Reduce avg tokens to ${w.avgActiveTokens}`);
+    check = tryFits();
+  }
+  if (!check.ok && w.maxNumSeqs > 64) {
+    w.maxNumSeqs = Math.max(64, Math.floor(w.maxNumSeqs / 2));
+    notes.push(`Reduce sequences to ${w.maxNumSeqs}`);
+    check = tryFits();
+  }
+  if (!check.ok && w.seqLen > 4096) {
+    w.seqLen = Math.max(4096, Math.floor(w.seqLen / 2));
+    notes.push(`Reduce context to ${w.seqLen}`);
+    check = tryFits();
+  }
+  let cpuOffloadGb = 0;
+  if (!check.ok) {
+    const worst = Math.max(0, ...check.br.perGpu.map((p) => p.totalBytes - (p.vramFreeBytes || 0)));
+    cpuOffloadGb = worst > 0 ? Math.ceil(bytesToGiB(worst)) : 0;
+    if (cpuOffloadGb > 0) notes.push(`Suggest CPU offload ≈ ${cpuOffloadGb} GiB`);
+  }
+  return { choices: c, work: w, cpuOffloadGb, notes };
+}

@@ -1,6 +1,6 @@
 /** Shared types for GET /admin/models/inspect-folder (declared once, used by every form component). */
 
-export interface EngineOption {
+interface EngineOption {
   engine: 'vllm' | 'llamacpp';
   format: 'safetensors' | 'gguf';
   label: string;

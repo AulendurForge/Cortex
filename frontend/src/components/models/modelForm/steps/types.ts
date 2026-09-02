@@ -5,7 +5,7 @@ import type { FormFieldName, ModelFormValues } from '../../modelFormValues';
 import type { Issue } from '../../validateFormValues';
 import type { InspectResult } from '../inspectTypes';
 
-export type StepType = 'engine' | 'source' | 'model' | 'core' | 'startup' | 'request' | 'summary';
+type StepType = 'engine' | 'source' | 'model' | 'core' | 'startup' | 'request' | 'summary';
 
 export interface StepConfig {
   type: StepType;

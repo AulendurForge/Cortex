@@ -9,7 +9,7 @@ import type { ModelItem } from '../../lib/validators';
 import { safeCopyToClipboard } from '../../lib/clipboard';
 import { useToast } from '../../providers/ToastProvider';
 
-export type ModelActions = {
+type ModelActions = {
   onLogs: (id: number) => void;
   onRecipe: (id: number) => void;
   onTest: (id: number) => void;
@@ -20,7 +20,7 @@ export type ModelActions = {
   onDelete: (id: number) => void;
 };
 
-export type ModelPending = {
+type ModelPending = {
   startingId: number | null;
   stoppingId: number | null;
   testingId: number | null;

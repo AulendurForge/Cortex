@@ -40,7 +40,7 @@ const CONFIG_STEPS: StepConfig[] = [
 
 const EMPTY_SOURCE: SourceState = { useGguf: false, selectedGguf: '', selectedGgufGroup: '' };
 
-export interface ModelWorkflowFormProps {
+interface ModelWorkflowFormProps {
   /** Receives the request body (create body or PATCH body) assembled by toSubmitPayload. */
   onSubmit: (body: Record<string, unknown>) => void;
   onCancel: () => void;

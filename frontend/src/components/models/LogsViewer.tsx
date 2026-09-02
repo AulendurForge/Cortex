@@ -1,11 +1,12 @@
 'use client';
 
 import React from 'react';
-import apiFetch from '../../lib/api-clients';
-import { useToast } from '../../providers/ToastProvider';
-import { safeCopyToClipboard } from '../../lib/clipboard';
+import { useToast } from '@/providers/ToastProvider';
+import { safeCopyToClipboard } from '@/lib/clipboard';
+import { LOG_SEVERITIES, filterBySeverity, findMatches, findSeveritySpans, mergeHighlightSpans, severityClass } from './logHighlight';
+import { useLogPoller } from './useLogPoller';
 
-export const LOG_TAIL_OPTIONS = [200, 1000, 5000, 20000] as const;
+const LOG_TAIL_OPTIONS = [200, 1000, 5000, 20000] as const;
 
 type Props = {
   /** Model whose container logs are shown (uses the shared API client with ?tail=). */
@@ -21,20 +22,15 @@ type Props = {
 };
 
 /**
- * Live container log viewer.  The fetcher is kept in a ref so re-renders of
- * the parent never restart the polling interval; "Retry" refetches; the tail
- * size is requested from the backend (10..20000 lines) instead of trimming
- * a full dump client-side.
+ * Live container log viewer.  Polling lives in useLogPoller (parent re-renders
+ * never restart the interval; "Retry" refetches); the tail size is requested
+ * from the backend (10..20000 lines) instead of trimming a full dump
+ * client-side; text helpers live in logHighlight.ts.
  */
 export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName, modelState, stateReason, initialTail = 1000 }: Props) {
   const { addToast } = useToast();
-  const [text, setText] = React.useState<string>('');
-  const [loading, setLoading] = React.useState<boolean>(true);
-  const [error, setError] = React.useState<string | null>(null);
   const [live, setLive] = React.useState<boolean>(true);
   const [tail, setTail] = React.useState<number>(initialTail);
-  const [reloadTick, setReloadTick] = React.useState<number>(0);
-  const [lastUpdated, setLastUpdated] = React.useState<number>(0);
   const [atBottom, setAtBottom] = React.useState<boolean>(true);
   const preRef = React.useRef<HTMLPreElement | null>(null);
   const atBottomRef = React.useRef(true);
@@ -45,46 +41,18 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
   const [useRegex, setUseRegex] = React.useState<boolean>(false);
   const [activeMatch, setActiveMatch] = React.useState<number>(0);
   const [wrap, setWrap] = React.useState<boolean>(true);
-  const severities = ['ERROR', 'WARN', 'INFO', 'DEBUG'] as const;
   const [activeSev, setActiveSev] = React.useState<Set<string>>(new Set());
-
-  // Keep the fetcher in a ref: parent re-renders must not restart polling.
-  const fetcherRef = React.useRef<(tail: number) => Promise<string>>(async () => '');
-  fetcherRef.current = fetcher ?? (async (n: number) => {
-    if (modelId === undefined) return '';
-    const r: unknown = await apiFetch(`/admin/models/${modelId}/logs?tail=${n}`);
-    if (typeof r === 'string') return r;
-    if (r && typeof r === 'object' && typeof (r as { logs?: unknown }).logs === 'string') return (r as { logs: string }).logs;
-    return '';
-  });
 
   React.useEffect(() => { atBottomRef.current = atBottom; }, [atBottom]);
 
-  // Polling
-  React.useEffect(() => {
-    let stop = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const loadOnce = async () => {
-      try {
-        const t = (await fetcherRef.current(tail)) || '';
-        if (stop) return;
-        setText(t);
-        setError(null);
-        setLastUpdated(Date.now());
-        if (atBottomRef.current) {
-          requestAnimationFrame(() => { try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight }); } catch {} });
-        }
-      } catch (e) {
-        if (!stop) setError((e as { message?: string })?.message || 'Failed to load logs');
-      } finally {
-        if (!stop) setLoading(false);
+  const { text, loading, error, lastUpdated, retry } = useLogPoller({
+    modelId, fetcher, tail, live, pollMs, modelState,
+    onLoaded: () => {
+      if (atBottomRef.current) {
+        requestAnimationFrame(() => { try { preRef.current?.scrollTo({ top: preRef.current.scrollHeight }); } catch {} });
       }
-    };
-    setLoading(true);
-    void loadOnce();
-    if (live && modelState !== 'stopped') timer = setInterval(() => { void loadOnce(); }, Math.max(750, pollMs));
-    return () => { stop = true; if (timer) clearInterval(timer); };
-  }, [modelId, live, pollMs, tail, reloadTick, modelState]);
+    },
+  });
 
   // Track scroll position for follow behavior
   React.useEffect(() => {
@@ -98,49 +66,9 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Build filtered text (severity)
-  const filteredText = React.useMemo(() => {
-    if (!activeSev.size) return text;
-    try {
-      const lines = text.split(/\r?\n/);
-      return lines.filter(l => {
-        const sev = (l.match(/\b(ERROR|WARN|INFO|DEBUG)\b/) || [])[1];
-        return sev ? activeSev.has(sev) : false;
-      }).join('\n');
-    } catch { return text; }
-  }, [text, activeSev]);
-
-  // Matches for search
-  const matches = React.useMemo(() => {
-    if (!query) return [] as Array<{ start: number; end: number }>;
-    try {
-      const flags = caseSensitive ? 'g' : 'gi';
-      const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(pattern, flags);
-      const out: Array<{ start: number; end: number }> = [];
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(filteredText))) {
-        out.push({ start: m.index, end: m.index + (m[0]?.length || 0) });
-        if (m.index === re.lastIndex) re.lastIndex++; // avoid zero-length loops
-      }
-      return out;
-    } catch { return []; }
-  }, [filteredText, query, caseSensitive, useRegex]);
-
-  // Severity spans for coloring
-  const sevSpans = React.useMemo(() => {
-    const out: Array<{ start: number; end: number; sev: 'ERROR'|'WARN'|'INFO'|'DEBUG' }> = [];
-    try {
-      const re = /\b(ERROR|WARN|INFO|DEBUG)\b/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(filteredText))) {
-        const sev = m[1] as 'ERROR'|'WARN'|'INFO'|'DEBUG';
-        out.push({ start: m.index, end: m.index + m[0].length, sev });
-        if (m.index === re.lastIndex) re.lastIndex++;
-      }
-    } catch {}
-    return out;
-  }, [filteredText]);
+  const filteredText = React.useMemo(() => filterBySeverity(text, activeSev), [text, activeSev]);
+  const matches = React.useMemo(() => findMatches(filteredText, query, caseSensitive, useRegex), [filteredText, query, caseSensitive, useRegex]);
+  const sevSpans = React.useMemo(() => findSeveritySpans(filteredText), [filteredText]);
 
   // Active match clamp
   React.useEffect(() => {
@@ -157,47 +85,20 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
     el.scrollTo({ top: ratio * el.scrollHeight - el.clientHeight * 0.3, behavior: 'smooth' });
   }, [activeMatch, matches, filteredText.length]);
 
-  // Render highlighted content efficiently (merge search matches + severity spans)
+  // Render highlighted content (search matches + severity spans merged by priority)
   const content = React.useMemo(() => {
-    type Span = { start: number; end: number; type: 'match' | 'active' | 'sev'; sev?: 'ERROR'|'WARN'|'INFO'|'DEBUG'; key: string };
-    const spans: Span[] = [];
-    matches.forEach((m, i) => {
-      spans.push({ start: m.start, end: m.end, type: i === activeMatch ? 'active' : 'match', key: `m-${i}` });
-    });
-    sevSpans.forEach((s, i) => spans.push({ start: s.start, end: s.end, type: 'sev', sev: s.sev, key: `s-${i}` }));
-    if (!spans.length) return filteredText;
-    spans.sort((a, b) => a.start - b.start || (a.end - b.end));
-    // merge overlaps by priority: active > match > sev
-    const merged: Span[] = [];
-    for (const s of spans) {
-      if (!merged.length) { merged.push(s); continue; }
-      const last = merged[merged.length - 1];
-      if (!last || typeof last.end !== 'number' || typeof last.start !== 'number') { merged.push(s); continue; }
-      if (s.start >= last.end) { merged.push(s); continue; }
-      // overlap: split; keep higher priority segment first
-      const pri = (t: Span['type']) => t === 'active' ? 3 : t === 'match' ? 2 : 1;
-      if (pri(s.type) > pri(last.type)) {
-        // cut last to s.start, then push s, then remainder of last
-        if (s.start > last.start) merged[merged.length - 1] = { ...last, end: s.start };
-        merged.push(s);
-        if (s.end < last.end) merged.push({ ...last, start: s.end });
-      } else {
-        // keep last priority; insert s remainder after last
-        if (s.end > last.end) merged.push({ ...s, start: last.end });
-      }
-    }
-    // build output
+    const merged = mergeHighlightSpans(matches, activeMatch, sevSpans);
+    if (!merged.length) return filteredText;
     const out: React.ReactNode[] = [];
     let cursor = 0;
-    const sevCls = (sev?: string) => sev === 'ERROR' ? 'text-red-300' : sev === 'WARN' ? 'text-amber-300' : sev === 'INFO' ? 'text-sky-300' : sev === 'DEBUG' ? 'text-slate-300' : '';
     for (const s of merged) {
       if (cursor < s.start) out.push(filteredText.slice(cursor, s.start));
       if (s.type === 'match') {
-        out.push(<span key={s.key} className={`bg-amber-500/40 rounded px-0.5 ${sevCls()}`}>{filteredText.slice(s.start, s.end)}</span>);
+        out.push(<span key={s.key} className="bg-amber-500/40 rounded px-0.5">{filteredText.slice(s.start, s.end)}</span>);
       } else if (s.type === 'active') {
         out.push(<span key={s.key} className="bg-yellow-400 text-black rounded px-0.5">{filteredText.slice(s.start, s.end)}</span>);
       } else {
-        out.push(<span key={s.key} className={sevCls(s.sev)}>{filteredText.slice(s.start, s.end)}</span>);
+        out.push(<span key={s.key} className={severityClass(s.sev)}>{filteredText.slice(s.start, s.end)}</span>);
       }
       cursor = s.end;
     }
@@ -271,7 +172,7 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
         <div className="flex flex-wrap items-center gap-2 justify-end">
           <span className="text-xs text-white/60 hidden md:inline">Filter</span>
           <div className="hidden md:flex items-center gap-1 text-xs">
-            {severities.map(s => (
+            {LOG_SEVERITIES.map(s => (
               <button type="button" key={s} className={`btn ${activeSev.has(s) ? 'bg-white/10' : ''}`} aria-pressed={activeSev.has(s)} onClick={() => {
                 const next = new Set(activeSev); next.has(s) ? next.delete(s) : next.add(s); setActiveSev(next);
               }}>{s}</button>
@@ -301,7 +202,7 @@ export function LogsViewer({ modelId, fetcher, onClose, pollMs = 2000, modelName
             <span className="text-white/60">{live ? 'Live updating' : 'Paused'} · Updated {fmtAgo(lastUpdated)}</span>
           )}
           {error && (
-            <span className="text-red-300" role="alert">{error} <button type="button" className="btn ml-2" onClick={() => setReloadTick((n) => n + 1)}>Retry</button></span>
+            <span className="text-red-300" role="alert">{error} <button type="button" className="btn ml-2" onClick={retry}>Retry</button></span>
           )}
         </div>
         {!atBottom && (

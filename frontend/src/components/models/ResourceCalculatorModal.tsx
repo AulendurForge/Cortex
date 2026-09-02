@@ -1,17 +1,16 @@
 'use client';
 
 import React from 'react';
-import apiFetch from '../../lib/api-clients';
-import { useGpus } from '../../hooks/useGpus';
-import { useBaseDir } from '../../hooks/useModelSource';
-import { Card, Button, Input, Select, SectionTitle, InfoBox, FormField, Badge } from '../UI';
-import { Modal } from '../Modal';
-import { NumberField } from '../NumberField';
-import { bytesToGiB, breakdownMemory, recommendGpuMemoryUtilization, type HardwareSnapshot, type ModelMeta, type Workload, type Choices, type Quantization, type KvDtype, type Precision } from '../../lib/model-math';
-import { Tooltip } from '../Tooltip';
-import { cn } from '../../lib/cn';
+import apiFetch from '@/lib/api-clients';
+import { useGpus } from '@/hooks/useGpus';
+import { useBaseDir } from '@/hooks/useModelSource';
+import { Card, Button, Input, Select, SectionTitle, InfoBox, FormField } from '@/components/UI';
+import { Modal } from '@/components/Modal';
+import { NumberField } from '@/components/NumberField';
+import { autoFit, breakdownMemory, MODEL_PRESETS, recommendGpuMemoryUtilization, type HardwareSnapshot, type ModelMeta, type Workload, type Choices, type Quantization, type KvDtype, type Precision } from '@/lib/model-math';
+import { CalculatorProjection } from './CalculatorProjection';
 
-export type CalculatorResult = {
+type CalculatorResult = {
   applied: boolean;
   values: Partial<{
     engine_type: 'vllm';
@@ -52,14 +51,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
     if (open && hw && hw.gpuCount > 0) setChoices((c) => ({ ...c, tpSize: Math.min(c.tpSize, hw.gpuCount) }));
   }, [open, hw]);
 
-  const presets: Array<{ id: string; label: string; meta: ModelMeta }> = [
-    { id: 'custom', label: 'Custom', meta: meta },
-    { id: '7b', label: 'Generic 7B', meta: { paramsB: 7, hiddenSize: 4096, numLayers: 32 } },
-    { id: '8b', label: 'Llama‑3‑8B', meta: { paramsB: 8, hiddenSize: 4096, numLayers: 32 } },
-    { id: '13b', label: 'Generic 13B', meta: { paramsB: 13, hiddenSize: 5120, numLayers: 40 } },
-    { id: '20b', label: 'Generic 20B', meta: { paramsB: 20, hiddenSize: 6144, numLayers: 44 } },
-    { id: '70b', label: 'Llama‑3‑70B', meta: { paramsB: 70, hiddenSize: 8192, numLayers: 80 } },
-  ];
+  const presets = [{ id: 'custom', label: 'Custom', meta }, ...MODEL_PRESETS];
   const [presetId, setPresetId] = React.useState<string>('custom');
   const applyPreset = (id: string) => {
     setPresetId(id);
@@ -125,77 +117,13 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
     return items;
   }, [summary]);
 
-  const autoFit = () => {
+  const onAutoFit = () => {
     if (!hw) return;
-    let c = { ...choices };
-    let w = { ...work };
-    const notes: string[] = [];
-    const tryFits = () => {
-      const br = breakdownMemory(meta, w, c, hw);
-      const ok = br.perGpu.every((p)=>p.fits);
-      return { ok, br };
-    };
-    let check = tryFits();
-    if (!check.ok && (!c.kvCacheDtype || !String(c.kvCacheDtype).startsWith('fp8'))) {
-      c.kvCacheDtype = 'fp8';
-      notes.push('Set kv_cache_dtype=fp8');
-      check = tryFits();
-    }
-    if (!check.ok && !c.quantization) {
-      c.quantization = 'fp8';
-      notes.push('Use FP8 quantization');
-      check = tryFits();
-    }
-    if (!check.ok && c.quantization !== 'awq' && c.quantization !== 'gptq') {
-      c.quantization = 'awq';
-      notes.push('Switch to 4-bit (awq)');
-      check = tryFits();
-    }
-    if (!check.ok && hw.gpuCount > c.tpSize) {
-      for (let t = c.tpSize + 1; t <= hw.gpuCount; t++) {
-        c.tpSize = t;
-        notes.push(`Increase TP to ${t}`);
-        check = tryFits();
-        if (check.ok) break;
-      }
-    }
-    if (!check.ok) {
-      const targets = [2048, 1024, 768];
-      for (const t of targets) {
-        if (check.ok) break;
-        const cur = w.maxBatchedTokens ?? 4096;
-        if (cur > t) {
-          w.maxBatchedTokens = t;
-          notes.push(`Reduce batched tokens to ${t}`);
-          check = tryFits();
-        }
-      }
-    }
-    if (!check.ok && (w.avgActiveTokens ?? 2048) > 1024) {
-      w.avgActiveTokens = Math.max(512, Math.floor((w.avgActiveTokens ?? 2048) / 2));
-      notes.push(`Reduce avg tokens to ${w.avgActiveTokens}`);
-      check = tryFits();
-    }
-    if (!check.ok && w.maxNumSeqs > 64) {
-      w.maxNumSeqs = Math.max(64, Math.floor(w.maxNumSeqs / 2));
-      notes.push(`Reduce sequences to ${w.maxNumSeqs}`);
-      check = tryFits();
-    }
-    if (!check.ok && w.seqLen > 4096) {
-      w.seqLen = Math.max(4096, Math.floor(w.seqLen / 2));
-      notes.push(`Reduce context to ${w.seqLen}`);
-      check = tryFits();
-    }
-    let offload = 0;
-    if (!check.ok) {
-      const worst = Math.max(0, ...check.br.perGpu.map((p)=> (p.totalBytes - (p.vramFreeBytes || 0))));
-      offload = worst > 0 ? Math.ceil(bytesToGiB(worst)) : 0;
-      if (offload > 0) notes.push(`Suggest CPU offload ≈ ${offload} GiB`);
-    }
-    setChoices(c);
-    setWork(w);
-    setCpuOffloadGb(offload);
-    setAdjustments(notes);
+    const r = autoFit(meta, work, choices, hw);
+    setChoices(r.choices);
+    setWork(r.work);
+    setCpuOffloadGb(r.cpuOffloadGb);
+    setAdjustments(r.notes);
   };
 
   return (
@@ -288,26 +216,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
             <section>
               <SectionTitle variant="purple">📊 Projection</SectionTitle>
               {summary ? (
-                <Card className="p-3 bg-white/[0.02] border-white/5 space-y-2">
-                  {summary.perGpu.map((p) => (
-                    <div key={p.index} className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[9px] uppercase font-black text-white/40">GPU {p.index}</span>
-                        <Badge className={!p.vramKnown ? "bg-white/10 text-white/60 border-white/10" : p.fits ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}>
-                          {!p.vramKnown ? 'CAPACITY UNKNOWN' : p.fits ? 'FITS' : 'OVERFLOW'}
-                        </Badge>
-                      </div>
-                      <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
-                        <div className={cn("h-full transition-all duration-1000", p.fits ? "bg-gradient-to-r from-indigo-500 to-purple-500" : "bg-red-500")}
-                             style={{ width: `${p.vramKnown && p.vramTotalBytes ? Math.min(100, (p.totalBytes / p.vramTotalBytes) * 100) : 0}%` }} />
-                      </div>
-                      <div className="flex justify-between text-[9px] font-mono text-white/40">
-                        <span>Weights: {bytesToGiB(p.weightsBytes).toFixed(1)}G</span>
-                        <span>KV: {bytesToGiB(p.kvBytes).toFixed(1)}G</span>
-                      </div>
-                    </div>
-                  ))}
-                </Card>
+                <CalculatorProjection perGpu={summary.perGpu} />
               ) : <div className="text-white/20 text-xs italic text-center py-4">Configure to see projection...</div>}
             </section>
           </div>
@@ -332,7 +241,7 @@ export function ResourceCalculatorModal({ open, onClose, onApply }: { open: bool
 
         <footer className="mt-auto pt-3 border-t border-white/10 flex items-center justify-between -mx-4 -mb-4 px-4 pb-4 bg-black/20">
           <div className="flex gap-2">
-            <Button variant="default" size="sm" onClick={autoFit}>✨ Auto-Fit</Button>
+            <Button variant="default" size="sm" onClick={onAutoFit}>✨ Auto-Fit</Button>
           </div>
           <div className="flex gap-2">
             <Button variant="default" size="sm" onClick={onClose}>Cancel</Button>

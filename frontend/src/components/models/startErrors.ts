@@ -1,6 +1,6 @@
 import type { ApiError } from '../../lib/api-clients';
 
-export type FriendlyError = { title: string; description: string };
+type FriendlyError = { title: string; description: string };
 
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.substring(0, n)}…` : s;

@@ -154,7 +154,6 @@ export type ModelFormValues = {
 };
 
 export type FormFieldName = keyof ModelFormValues;
-export type FormValue = ModelFormValues[FormFieldName];
 
 export const SAMPLING_FIELDS = [
   'temperature', 'top_p', 'top_k', 'repetition_penalty', 'frequency_penalty', 'presence_penalty',
@@ -202,7 +201,7 @@ export const VLLM_ONLY_FIELDS: ReadonlyArray<string> = [
 export const LLAMACPP_ONLY_FIELDS: ReadonlyArray<string> = [...otherEngineOnlyFields(STATIC_ENGINE_SPEC, 'vllm')];
 
 /** Fields the given engine must not submit (the other engine's exclusive fields). */
-export function fieldsToSkip(engine: EngineType, spec?: EngineSpec | null): Set<string> {
+function fieldsToSkip(engine: EngineType, spec?: EngineSpec | null): Set<string> {
   if (spec) {
     return otherEngineOnlyFields(spec, engine);
   }
@@ -265,7 +264,7 @@ export function apiItemToFormValues(item: Record<string, unknown>): Partial<Mode
 }
 
 /** Shape of GET /admin/recipes/{id} as far as prefill is concerned. */
-export type RecipeLike = {
+type RecipeLike = {
   id?: number;
   name?: string;
   description?: string | null;

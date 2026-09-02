@@ -9,7 +9,7 @@ import { BoolField, Collapsible, EngineDefaultMark, FieldShell, JsonTextarea, Se
 /** Groups that are rendered by dedicated editors, never by the generic section. */
 const HIDDEN_GROUPS = new Set(['custom', 'request']);
 
-export type SpecFieldsSectionProps = {
+type SpecFieldsSectionProps = {
   spec: EngineSpec;
   engine: EngineType;
   values: ModelFormValues;
@@ -29,7 +29,7 @@ function helpWithFlag(f: FieldSpec, engine: EngineType): string | undefined {
 }
 
 /** One input for one spec field, chosen from its kind / form / choices. */
-export function SpecFieldInput({
+function SpecFieldInput({
   field: f,
   engine,
   value,
