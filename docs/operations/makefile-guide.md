@@ -257,7 +257,7 @@ Before deploying to production:
 make prod-check
 # scripts/prod-check.sh: required secrets present and not defaults, CORS origin set (no *),
 # rendered prod compose has no :latest tags and GATEWAY_DEV_ALLOW_ALL_KEYS=false,
-# versions.env matches backend/src/config.py, /var/cortex dirs exist, port 9090 free.
+# versions.env matches backend/src/config.py, /var/cortex dirs exist, Prometheus port free.
 # Exit code 1 on any failure.
 ```
 
@@ -391,7 +391,7 @@ make db-reset
 
 ### Port conflicts
 
-If ports 8084, 9090, or 5432 are already in use:
+If ports 8084, 19090, or 5432 are already in use:
 
 1. Edit `docker.compose.dev.yaml` to change port mappings
 2. Restart services:
@@ -522,7 +522,7 @@ Print this and keep it handy:
 │ URLs (use IP from 'make ip', not localhost):    │
 │   Gateway:     http://YOUR_IP:8084              │
 │   Admin UI:    http://YOUR_IP:3001              │
-│   Prometheus:  http://YOUR_IP:9090 (PROM_PORT)  │
+│   Prometheus:  http://YOUR_IP:19090 (PROM_PORT)  │
 │   PgAdmin:     http://127.0.0.1:5050 (tools)    │
 └─────────────────────────────────────────────────┘
 ```

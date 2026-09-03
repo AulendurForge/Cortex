@@ -112,7 +112,7 @@ sudo ufw allow 22/tcp && sudo ufw allow 80,443/tcp
 sudo ufw enable
 ```
 
-Ports 8084 (gateway) and 3001/9090/9100/9400/8085 (loopback) are not published beyond the
+Ports 8084 (gateway) and 3001/19090/9100/9400/8085 (loopback) are not published beyond the
 host. Model containers publish their engine port on `127.0.0.1` only and require
 `INTERNAL_VLLM_API_KEY`.
 

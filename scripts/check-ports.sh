@@ -8,7 +8,7 @@ COMPOSE="$*"
 command -v ss >/dev/null 2>&1 || exit 0          # no ss: skip the check
 YELLOW='\033[1;33m'; NC='\033[0m'
 
-declare -A HINT=( [9090]=PROM_PORT [9100]=NODE_EXPORTER_PORT [8085]=CADVISOR_PORT [9400]=DCGM_PORT
+declare -A HINT=( [19090]=PROM_PORT [9100]=NODE_EXPORTER_PORT [8085]=CADVISOR_PORT [9400]=DCGM_PORT
                   [3001]=FRONTEND_PORT [15432]=CORTEX_POSTGRES_PORT [16379]=CORTEX_REDIS_PORT [5050]=PGADMIN_PORT )
 
 # published host ports of the rendered config (compose v2 prints `published: "9090"`)

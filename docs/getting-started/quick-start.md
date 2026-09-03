@@ -27,7 +27,7 @@ sudo usermod -aG docker $USER && newgrp docker
 
 ```bash
 git clone <repo> Cortex && cd Cortex
-cp .env.example .env         # optional: paths, ports (PROM_PORT=9094 if 9090 is taken)
+cp .env.example .env         # optional: paths and ports
 make quick-start             # = make build + make up; asks for the admin username/password once
 ```
 
@@ -37,7 +37,7 @@ the `linux`/`gpu` monitoring profiles automatically. The output ends with the UR
 ```
 Admin UI:   http://192.168.1.50:3001/login
 Gateway:    http://192.168.1.50:8084
-Prometheus: http://192.168.1.50:9090
+Prometheus: http://192.168.1.50:19090
 ```
 
 Use the **host IP, not `localhost`**, from other devices. `make ip` prints it again.
@@ -123,8 +123,8 @@ from the LAN. Details: [Network access](../operations/network-access.md).
 
 Prometheus scrapes the gateway, node-exporter, cAdvisor, DCGM and every running model
 container (discovered by Docker label). `make monitoring-status` lists the targets; the
-**System Monitor** page shows host, GPU and per-model metrics. If port 9090 is taken (Cockpit
-uses it), set `PROM_PORT=9094` in `.env`. See [Observability](../architecture/observability.md).
+**System Monitor** page shows host, GPU and per-model metrics. Prometheus defaults to port
+`19090` on the host (avoids Cockpit on 9090). See [Observability](../architecture/observability.md).
 
 ## 8. Everyday commands
 

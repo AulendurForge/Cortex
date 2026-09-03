@@ -82,12 +82,12 @@ Also check `nvidia-smi` works on the host and `docker info | grep -i runtime` li
 |---|---|---|
 | 8084 | gateway (host network) | `ss -ltnp | grep 8084`; stop the other process (the gateway port is fixed) |
 | 3001 | UI | `FRONTEND_PORT=3002` in `.env`; `make up` updates CORS accordingly |
-| 9090 | Prometheus | **Cockpit uses 9090 on many RHEL/Ubuntu hosts**: `PROM_PORT=9094` in `.env` (the gateway's `PROMETHEUS_URL` follows) |
+| 19090 | Prometheus | Host port (`PROM_PORT`); avoids Cockpit on 9090 |
 | 15432 / 16379 | Postgres / Redis (loopback) | `CORTEX_POSTGRES_PORT` / `CORTEX_REDIS_PORT` in `.env` |
 | 9100 / 9400 / 8085 | exporters (loopback) | `NODE_EXPORTER_PORT` / `DCGM_PORT` / `CADVISOR_PORT` |
 | model engine ports | published on `127.0.0.1` with a random host port | never conflict; the gateway reads the assigned port |
 
-`make validate` warns when 9090 belongs to a non-Docker process. Symptom of the Prometheus
+`make validate` warns when the configured Prometheus port belongs to a non-Docker process. Symptom of the Prometheus
 clash: `cortex-prometheus-1` restarts in a loop with `bind: address already in use`, and the
 System Monitor page shows no host metrics.
 

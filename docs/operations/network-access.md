@@ -34,7 +34,7 @@ Cortex gateway runs with **host network mode**, binding directly to `0.0.0.0:808
 |---------|------|---------|
 | Admin UI | 3001 | Web interface for managing Cortex |
 | API Gateway | 8084 | OpenAI-compatible API endpoint |
-| Prometheus | 9090 | Metrics and monitoring |
+| Prometheus | 19090 | Metrics and monitoring |
 | PgAdmin | 5050 | Database administration |
 
 ## Firewall Configuration (Linux/UFW)

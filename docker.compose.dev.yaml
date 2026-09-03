@@ -5,8 +5,7 @@ name: cortex
 #   set -a; . ./versions.env; set +a; docker compose -f docker.compose.dev.yaml up -d
 #
 # Optional profiles:  linux -> node-exporter + cadvisor,  gpu -> dcgm-exporter,  tools -> pgadmin
-# Port notes: Prometheus defaults to ${PROM_PORT:-9090}. Cockpit and other tools also use
-# 9090; set PROM_PORT=9094 in .env if that port is taken (the gateway follows PROMETHEUS_URL).
+# Port notes: Prometheus host port defaults to ${PROM_PORT:-19090} (avoids Cockpit on 9090).
 
 x-restart: &restart
   restart: unless-stopped
@@ -87,7 +86,7 @@ services:
       # --- infra (loopback because of host networking) ---
       DATABASE_URL: postgresql+asyncpg://cortex:cortex@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/cortex
       REDIS_URL: redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0
-      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-9090}
+      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-19090}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     healthcheck:
@@ -139,8 +138,7 @@ services:
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
-    # Change with PROM_PORT=9094 if 9090 is taken (e.g. Cockpit)
-    ports: ["${PROM_PORT:-9090}:9090"]
+    ports: ["${PROM_PORT:-19090}:9090"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:

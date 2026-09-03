@@ -135,9 +135,9 @@ if [ -S /var/run/docker.sock ]; then
     [ "$gid" != "0" ] && ok "docker.sock group gid $gid (gateway joins it at start)" || warn "docker.sock owned by gid 0; set CORTEX_RUN_AS_ROOT=true or chgrp docker /var/run/docker.sock"
 fi
 if command -v ss >/dev/null 2>&1; then
-    for p in 8084 "${PROM_PORT:-9090}"; do
+    for p in 8084 "${PROM_PORT:-19090}"; do
         if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^cortex-'; then ok "port $p in use (Cortex running)"; else warn "port $p already in use by another process (Cockpit uses 9090: set PROM_PORT=9094)"; fi
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^cortex-'; then ok "port $p in use (Cortex running)"; else warn "port $p already in use by another process (set PROM_PORT in .env)"; fi
         fi
     done
 fi
@@ -146,7 +146,7 @@ command -v nvidia-smi >/dev/null 2>&1 && ok "nvidia-smi present (driver $(nvidia
 echo ""
 echo -e "${BOLD}6. Reminders (not checked)${NC}"
 echo "  - TLS reverse proxy in front of :3001 and :8084 (docs/operations/production-deployment.md)"
-echo "  - Firewall: only the proxy ports exposed; 8084/3001/9090 stay LAN-internal or loopback"
+echo "  - Firewall: only the proxy ports exposed; 8084/3001/19090 stay LAN-internal or loopback"
 echo "  - Backups scheduled (make db-backup) and restore tested"
 echo ""
 if [ "$FAIL" -gt 0 ]; then

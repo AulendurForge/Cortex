@@ -170,9 +170,21 @@ if command -v ss &> /dev/null; then
     else
         test_result "Frontend Listener" "fail" "Nothing listening on :3001. Run: make up"
     fi
-    PROM_PORT_CFG=$(grep -E '^PROM_PORT=' .env 2>/dev/null | cut -d= -f2); PROM_PORT_CFG=${PROM_PORT_CFG:-9090}
-    if ss -ltnp 2>/dev/null | grep -E ":${PROM_PORT_CFG}\b" | grep -qv docker; then
-        test_result "Prometheus Port ${PROM_PORT_CFG}" "warn" "Another process (e.g. Cockpit) owns :${PROM_PORT_CFG}. Set PROM_PORT=9094 in .env"
+    PROM_PORT_CFG=$(grep -E '^PROM_PORT=' .env 2>/dev/null | cut -d= -f2); PROM_PORT_CFG=${PROM_PORT_CFG:-19090}
+    PROM_LISTENING=false
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${PROM_PORT_CFG}$" && PROM_LISTENING=true
+    PROM_CONTAINER=$(docker ps --filter "name=cortex-prometheus" --format "{{.Names}}" 2>/dev/null | head -1)
+    PROM_PORTS=$(docker ps --filter "name=cortex-prometheus" --format "{{.Ports}}" 2>/dev/null | head -1)
+    if [ "$PROM_LISTENING" = true ]; then
+        if [ -n "$PROM_CONTAINER" ] && echo "$PROM_PORTS" | grep -qE ":${PROM_PORT_CFG}->"; then
+            test_result "Prometheus Port ${PROM_PORT_CFG}" "pass" "cortex-prometheus is listening"
+        elif ss -ltnp 2>/dev/null | grep -E ":${PROM_PORT_CFG}\b" | grep -qiE 'docker|prometheus'; then
+            test_result "Prometheus Port ${PROM_PORT_CFG}" "pass" "Docker is publishing :${PROM_PORT_CFG}"
+        else
+            test_result "Prometheus Port ${PROM_PORT_CFG}" "warn" "Another process owns :${PROM_PORT_CFG}. Set PROM_PORT to a free port in .env"
+        fi
+    elif [ -n "$PROM_CONTAINER" ]; then
+        test_result "Prometheus Port ${PROM_PORT_CFG}" "warn" "cortex-prometheus is up but :${PROM_PORT_CFG} is not listening yet"
     fi
 else
     test_result "Network Listeners" "warn" "ss not available; skipped"

@@ -20,8 +20,8 @@ Model containers need no static configuration: the gateway labels each container
 stops. Both engines expose Prometheus text on port 8000 (`--metrics` is always passed to
 llama-server). Check `http://<host>:<PROM_PORT>/targets` or `make monitoring-status`.
 
-Prometheus's own port defaults to `9090` (`PROM_PORT`); Cockpit and other tools also use
-9090, so set `PROM_PORT=9094` in `.env` if needed - the gateway's `PROMETHEUS_URL` follows.
+Prometheus's host port defaults to `19090` (`PROM_PORT`), avoiding Cockpit and other tools on
+9090. The gateway's `PROMETHEUS_URL` follows `PROM_PORT`.
 Retention: `PROM_RETENTION` (7d dev, 15d + `PROM_RETENTION_SIZE=10GB` prod).
 
 ## Gateway metrics (`/metrics`)

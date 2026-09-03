@@ -19,7 +19,7 @@ The last lines of the output are your URLs:
 ```
 Admin UI:   http://192.168.1.50:3001/login
 Gateway:    http://192.168.1.50:8084
-Prometheus: http://192.168.1.50:9090
+Prometheus: http://192.168.1.50:19090
 ```
 
 **Use that IP, not `localhost`, from any other device.** `make ip` prints it again.
@@ -57,7 +57,7 @@ make test-backend      # unit tests inside the gateway container
 | Symptom | Do |
 |---|---|
 | UI unreachable from another device | use the host IP; `sudo ufw allow 3001/tcp; sudo ufw allow 8084/tcp` |
-| Prometheus keeps restarting | port 9090 taken (Cockpit): `echo PROM_PORT=9094 >> .env && make restart` |
+| Prometheus keeps restarting | port conflict: set `PROM_PORT=<free port>` in `.env` and `make restart` |
 | model stuck `loading` / `failed` | `make logs-models`, then [docs/operations/runbooks.md](docs/operations/runbooks.md) |
 | CORS error in the browser | IP changed: `make restart` |
 | another container must call Cortex | `http://host.docker.internal:8084`; `make setup-firewall` once on UFW hosts |

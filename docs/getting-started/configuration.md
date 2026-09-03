@@ -24,7 +24,7 @@ Image tags are **not** configured here: they come from `versions.env`
 | `REQUEST_MAX_BODY_BYTES` | `1048576` | 413 above this (compose: 8 MiB). |
 | `DATABASE_URL` | `postgresql+asyncpg://cortex:cortex@postgres:5432/cortex` | Async SQLAlchemy URL. Compose uses `127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}` (host network). |
 | `REDIS_URL` | `redis://redis:6379/0` | Compose: `redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0`. |
-| `PROMETHEUS_URL` | `http://prometheus:9090` | Compose: `http://127.0.0.1:${PROM_PORT:-9090}`. |
+| `PROMETHEUS_URL` | `http://prometheus:9090` | Compose: `http://127.0.0.1:${PROM_PORT:-19090}`. |
 
 ## Limits and resilience
 
@@ -85,7 +85,7 @@ Removed in 0.2: `LLAMACPP_DEFAULT_NGL`, `LLAMACPP_DEFAULT_BATCH_SIZE`, `LLAMACPP
 | `HOST_IP` | detected by `scripts/detect-ip.sh` | LAN IP used for CORS and printed URLs. |
 | `CORTEX_MODELS_DIR` / `HF_CACHE_DIR` / `CORTEX_EXPORT_DIR` | `/var/cortex/...` | Host directories to mount. |
 | `FRONTEND_PORT` | `3001` | UI port. |
-| `PROM_PORT` | `9090` | Prometheus port (`9094` if Cockpit owns 9090). |
+| `PROM_PORT` | `19090` | Host Prometheus port (avoids Cockpit on 9090). |
 | `PROM_RETENTION` | `7d` / `15d` | Prometheus retention. |
 | `CORTEX_POSTGRES_PORT` / `CORTEX_REDIS_PORT` | `15432` / `16379` | Loopback ports for Postgres and Redis. |
 | `NODE_EXPORTER_PORT` / `DCGM_PORT` / `CADVISOR_PORT` | `9100` / `9400` / `8085` | Exporter loopback ports. |

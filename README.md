@@ -23,7 +23,7 @@ own infrastructure. Built and maintained by Aulendur Labs.
 ```bash
 sudo apt-get install -y make docker.io docker-compose-plugin curl jq
 sudo mkdir -p /var/cortex/{models,hf-cache,exports} && sudo chown -R 1000:1000 /var/cortex
-cp .env.example .env          # optional: paths, PROM_PORT=9094 if Cockpit owns 9090
+cp .env.example .env          # optional: paths and ports
 make quick-start              # build + up; asks for the admin username/password once
 ```
 

@@ -110,7 +110,7 @@ services:
       # --- infra ---
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cortex}:${POSTGRES_PASSWORD:-cortex}@127.0.0.1:${CORTEX_POSTGRES_PORT:-15432}/${POSTGRES_DB:-cortex}
       REDIS_URL: redis://127.0.0.1:${CORTEX_REDIS_PORT:-16379}/0
-      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-9090}
+      PROMETHEUS_URL: http://127.0.0.1:${PROM_PORT:-19090}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     healthcheck:
@@ -169,7 +169,7 @@ services:
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
-    ports: ["127.0.0.1:${PROM_PORT:-9090}:9090"]
+    ports: ["127.0.0.1:${PROM_PORT:-19090}:9090"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:

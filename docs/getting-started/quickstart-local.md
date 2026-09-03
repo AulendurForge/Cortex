@@ -46,7 +46,7 @@ To include host and GPU metrics on Linux with NVIDIA drivers installed, enable p
 export COMPOSE_PROFILES=linux,gpu
 docker compose -f docker.compose.dev.yaml up -d node-exporter dcgm-exporter
 ```
-Verify targets at `http://localhost:9090/targets`.
+Verify targets at `http://localhost:19090/targets`.
 
 ## Troubleshooting
 - Port conflicts: change ports in compose or app config.

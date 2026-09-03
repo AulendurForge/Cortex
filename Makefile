@@ -23,7 +23,7 @@ export PROMETHEUS_IMAGE NODE_EXPORTER_IMAGE DCGM_EXPORTER_IMAGE CADVISOR_IMAGE
 
 # Ports that compose reads from .env; mirrored here so `make health` probes the right ones.
 env_value = $(shell grep -E '^$(1)=' .env 2>/dev/null | tail -1 | cut -d= -f2-)
-PROM_PORT ?= $(or $(call env_value,PROM_PORT),9090)
+PROM_PORT ?= $(or $(call env_value,PROM_PORT),19090)
 FRONTEND_PORT ?= $(or $(call env_value,FRONTEND_PORT),3001)
 NODE_EXPORTER_PORT ?= $(or $(call env_value,NODE_EXPORTER_PORT),9100)
 CADVISOR_PORT ?= $(or $(call env_value,CADVISOR_PORT),8085)
@@ -71,7 +71,7 @@ help: ## Show this help message
 	@echo ""
 	@echo "$(COLOR_BLUE)Variables:$(COLOR_RESET)"
 	@echo "  $(COLOR_YELLOW)ENV$(COLOR_RESET)        dev (default) or prod        $(COLOR_YELLOW)PROFILES$(COLOR_RESET)  linux,gpu,tools (auto: $(if $(PROFILES),$(PROFILES),none))"
-	@echo "  $(COLOR_YELLOW)PROM_PORT$(COLOR_RESET)  $(PROM_PORT) (set PROM_PORT=9094 in .env if 9090 is taken, e.g. by Cockpit)"
+	@echo "  $(COLOR_YELLOW)PROM_PORT$(COLOR_RESET)  $(PROM_PORT) (default 19090; avoids Cockpit on 9090)"
 	@echo ""
 	@echo "$(COLOR_BLUE)Detected:$(COLOR_RESET) host IP $(HOST_IP), $(UNAME_S), GPU: $(if $(filter yes,$(HAS_NVIDIA)),yes,no)"
 	@echo ""
