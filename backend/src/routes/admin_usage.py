@@ -53,6 +53,9 @@ async def usage_series(hours: int = 24, bucket: str = "hour", model: Optional[st
     """Requests/tokens per bucket (minute | hour | day), zero-filled; same filters as /usage."""
     if bucket not in ("minute", "hour", "day"):
         raise HTTPException(status_code=400, detail="invalid_bucket")
+    # keep the zero-filled series bounded (~3k points max): minute buckets only for short windows
+    if bucket == "minute" and hours > 48:
+        raise HTTPException(status_code=400, detail="bucket=minute is limited to 48 hours; use hour or day")
     SessionLocal = _get_session()
     if SessionLocal is None:
         raise HTTPException(status_code=503, detail="Database not ready")

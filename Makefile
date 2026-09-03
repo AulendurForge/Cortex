@@ -47,7 +47,9 @@ HOST_IP := $(shell bash scripts/detect-ip.sh 2>/dev/null || echo "localhost")
 DOCKER_COMPOSE = HOST_IP=$(HOST_IP) PROM_PORT=$(PROM_PORT) FRONTEND_PORT=$(FRONTEND_PORT) $(COMPOSE_PROFILES) docker compose -f $(COMPOSE_FILE)
 GATEWAY_CONTAINER = cortex-gateway-1
 # integration tests log in with the admin from .env
-TEST_ADMIN_ENV = -e CORTEX_TEST_ADMIN_USER=$(call env_value,ADMIN_BOOTSTRAP_USERNAME) -e CORTEX_TEST_ADMIN_PASS=$(call env_value,ADMIN_BOOTSTRAP_PASSWORD)
+# Values are read by the recipe shell (double-quoted) so passwords with shell-special characters survive.
+env_shell = "$$(sed -nE 's/^$(1)=(.*)$$/\1/p' .env 2>/dev/null | tail -1 | sed -E "s/^'(.*)'$$/\\1/; s/^\"(.*)\"$$/\\1/")"
+TEST_ADMIN_ENV = -e CORTEX_TEST_ADMIN_USER=$(call env_shell,ADMIN_BOOTSTRAP_USERNAME) -e CORTEX_TEST_ADMIN_PASS=$(call env_shell,ADMIN_BOOTSTRAP_PASSWORD)
 FRONTEND_CONTAINER = cortex-frontend-1
 
 # Colors

@@ -129,6 +129,7 @@ export function useGuideFacts(): GuideFacts {
   const hostIp = useHostIP();
   const [gatewayBase, setGatewayBase] = useState('');
   useEffect(() => { setGatewayBase(getGatewayBaseUrl()); }, []);
-  const { data } = useQuery({ queryKey: ['system', 'about'], queryFn: fetchSystemAbout, staleTime: 5 * 60_000 });
+  // admin-only endpoint: regular users keep the derived defaults (no retries, no error UI)
+  const { data } = useQuery({ queryKey: ['system', 'about'], queryFn: fetchSystemAbout, staleTime: 5 * 60_000, retry: false });
   return useMemo(() => factsFrom(data, { gatewayBase, hostIp }), [data, gatewayBase, hostIp]);
 }
